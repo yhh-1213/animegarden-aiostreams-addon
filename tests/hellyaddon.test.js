@@ -15,6 +15,7 @@ const {
     isEpisodeMatch,
     detectChineseSubtitle,
     detectChineseFansubGroup,
+    inspectChineseSubtitle,
     selectBestVideoFile,
     toSimplifiedChinese,
     toTraditionalChinese,
@@ -146,9 +147,42 @@ test("selectBestVideoFile supports absolute episode matching inside season pack"
     assert.equal(selected.id, "f25");
 });
 
+test("selectBestVideoFile handles Windows backslash paths without falling back to largest file", () => {
+    const files = [
+        { id: "e1", name: "\\Seihantai na Kimi to Boku 2026 S01E01-[1080p][BDRIP][x265.OPUS].mkv", size: 500 * 1024 * 1024 },
+        { id: "e2", name: "\\Seihantai na Kimi to Boku 2026 S01E02-[1080p][BDRIP][x265.OPUS].mkv", size: 800 * 1024 * 1024 }
+    ];
+
+    const selected = selectBestVideoFile(files, 1, 1, false);
+    assert.ok(selected);
+    assert.equal(selected.id, "e1");
+});
+
 //=============================================================================
 // 5. Parser: Chinese Subtitle & Fansub Group Detection
 //=============================================================================
+test("inspectChineseSubtitle identifies hardcoded vs muxed subtitles and external subtitle tracks", () => {
+    const hardcoded = inspectChineseSubtitle("[Prejudice-Studio] 正相反的你与我 Seihantai na Kimi to Boku - 01 [Bilibili WEB-DL 1080P AVC 8bit AAC MP4][简日内嵌]");
+    assert.equal(hardcoded.hasChinese, true);
+    assert.equal(hardcoded.mode, "hardcoded");
+    assert.equal(hardcoded.badge, "简中内嵌");
+
+    const muxed = inspectChineseSubtitle("[7³ACG] 相反的你和我/Seihantai na Kimi to Boku S01 | 01-12 [简繁字幕] BDrip 1080p x265 OPUS 2.0");
+    assert.equal(muxed.hasChinese, true);
+    assert.equal(muxed.mode, "muxed");
+    assert.equal(muxed.badge, "简繁内封");
+
+    const external = inspectChineseSubtitle("Raw Show - 01", null, [
+        { name: "video.mkv" },
+        { name: "subs/ep01.chs.ass" }
+    ]);
+    assert.equal(external.hasChinese, true);
+    assert.equal(external.mode, "external");
+    assert.equal(external.badge, "简中外挂");
+
+    const nonChinese = inspectChineseSubtitle("[SubsPlease] Show - 01 (1080p).mkv");
+    assert.equal(nonChinese.hasChinese, false);
+});
 test("detectChineseSubtitle correctly categorizes Simplified, Traditional, and Dual subtitles", () => {
     const subDual = detectChineseSubtitle("【极影字幕社】[简日双语][1080P]");
     assert.equal(subDual.hasChinese, true);

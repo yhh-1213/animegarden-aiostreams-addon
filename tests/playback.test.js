@@ -52,6 +52,29 @@ test("resolveStorePlayback generates redirect for cached selected file", async (
     assert.deepEqual(action, { type: "redirect", url: "https://cdn.example/video.mkv" });
 });
 
+test("resolveStorePlayback does not treat non-batch TV title as a movie", async () => {
+    let capturedIsMovie = null;
+    await resolveStorePlayback({
+        entry: { service: "realdebrid", apiKey: "rd-key" },
+        hash: "TEST_HASH_TV",
+        episode: 1,
+        expectedSeason: 1,
+        title: "Seihantai na Kimi to Boku S01E01-[1080p][BDRIP][x265.OPUS]",
+        isMovie: false,
+        addStoreTorz: async () => ({
+            status: "cached",
+            files: [{ id: 1, link: "link1", name: "Episode 01.mkv" }]
+        }),
+        generateStoreLink: async () => "https://cdn.example/video.mkv",
+        selectBestVideoFile: (files, ep, s, isMovie) => {
+            capturedIsMovie = isMovie;
+            return files[0];
+        }
+    });
+
+    assert.equal(capturedIsMovie, false);
+});
+
 test("resolveStorePlayback returns archive when cached torrent has no matching file", async () => {
     const action = await resolveStorePlayback({
         entry: { service: "torbox", apiKey: "tb-key" },

@@ -21,9 +21,9 @@ test("startup backfill runs each source independently and reports partial failur
     assert.equal(result.summary.tokyotosho.status, "complete");
 });
 
-test("docker compose does not wrap catalog daily runner through npm script defaults", () => {
+test("docker compose does not include legacy catalog runner container", () => {
     const compose = fs.readFileSync("docker-compose.yml", "utf8");
 
     assert.doesNotMatch(compose, /"npm", "run", "catalog:daily"/);
-    assert.match(compose, /"node",\s*"scripts\/catalog-daily-runner\.js"/);
+    assert.doesNotMatch(compose, /ingest:/);
 });

@@ -211,7 +211,8 @@ app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res)
             episode: parseInt(episode || "1", 10) || 1,
             expectedSeason: parseInt(req.query.season || "1", 10) || 1,
             title: req.query.title || "",
-            isMovie: req.query.movie === "1",
+            isMovie: req.query.movie === "1" || req.query.movie === "true",
+            absoluteEp: req.query.abs ? parseInt(req.query.abs, 10) : null,
             selectBestVideoFile
         });
 
