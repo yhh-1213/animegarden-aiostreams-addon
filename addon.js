@@ -49,6 +49,7 @@ const {
 const { getTorrentsForStream } = require("./lib/cache/stream-cache");
 const { buildMediaKey } = require("./lib/cache/torrent-cache");
 const { checkStoreTorzWithCache } = require("./lib/cache/debrid-cache");
+const { maskApiKey } = require("./lib/debrid");
 const { filterByCanonical } = require("./lib/normalizer/match");
 
 let BASE_URL = process.env.BASE_URL || "http://127.0.0.1:7002";
@@ -959,16 +960,26 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
 
         // Check availability with TorBox, PikPak, etc.
         const hashes = torrents.map(t => t.hash.toLowerCase());
+        const serviceSummary = userConfig.debridServices.map(s => `${s.service} (${maskApiKey(s.apiKey)})`).join(", ");
+        console.log(`[HellyAddon] Checking debrid availability for ${hashes.length} candidate torrents across services: [${serviceSummary || "None configured"}]`);
+
         const availabilityByEntry = await Promise.all(
             userConfig.debridServices.map(entry =>
                 checkStoreTorzWithCache(hashes, entry, {
                     scope: { season: expectedSeason, episode: requestedEp }
                 }).catch(error => {
-                    console.error(`[HellyAddon] ${entry.service} availability check error: ${error.message}`);
+                    console.error(`[HellyAddon] [${entry.service}] Availability check error: ${error.message}`);
                     return {};
                 })
             )
         );
+
+        userConfig.debridServices.forEach((entry, idx) => {
+            const avail = availabilityByEntry[idx] || {};
+            const cachedCount = Object.values(avail).filter(x => x.isCached).length;
+            console.log(`[HellyAddon] [${entry.service}] Availability result: ${cachedCount}/${hashes.length} torrents cached in cloud`);
+        });
+
         const hellyPayload = encodeConfigPayload(userConfig);
 
         const flags = {
@@ -1049,7 +1060,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         });
         streams.push(...debridStreams);
 
-        console.log(`[HellyAddon] Final streams built: ${streams.length}\n`);
+        console.log(`[HellyAddon] Final streams built: ${streams.length} (Debrid: ${debridStreams.length}, P2P: ${streams.length - debridStreams.length})\n`);
 
         //===============
         // 4-PHASE HIGH PRECISION SORTER

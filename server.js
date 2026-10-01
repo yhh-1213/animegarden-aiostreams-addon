@@ -7,6 +7,7 @@ const { addonInterface, configuredManifest } = require("./addon");
 const { parseConfig } = require("./lib/config");
 const { selectBestVideoFile } = require("./lib/parser");
 const { resolveStorePlayback, resolveStoreSubtitle } = require("./lib/playback");
+const { maskApiKey } = require("./lib/debrid");
 const { applyHttpCacheHeaders } = require("./lib/cache/http-cache");
 
 const app = express();
@@ -200,9 +201,19 @@ function serveArchiveVideo(req, res) {
 app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res) => {
     const { nexioPayload, serviceIndex, hash, episode } = req.params;
     const userConfig = parseConfig({ HellyAddon: nexioPayload, NexioTorii: nexioPayload });
-    const entry = userConfig.debridServices[parseInt(serviceIndex, 10)];
+    const sIndex = parseInt(serviceIndex, 10);
+    const entry = userConfig.debridServices[sIndex];
 
-    if (!entry) return res.status(404).send("Debrid service not found");
+    console.log(`\n[Resolve] ===== INCOMING STREAM RESOLVE REQUEST =====`);
+    console.log(`[Resolve] Hash: ${hash} | Episode: ${episode || 1} | Season: ${req.query.season || 1} | Movie: ${req.query.movie === "1"}`);
+    console.log(`[Resolve] Title: "${req.query.title || 'Unknown'}"`);
+
+    if (!entry) {
+        console.error(`[Resolve] ❌ Debrid service at index ${serviceIndex} not found! Configured services: [${userConfig.debridServices.map(s => s.service).join(", ") || 'none'}]`);
+        return res.status(404).send("Debrid service not found");
+    }
+
+    console.log(`[Resolve] Target Service: "${entry.service}" (Token: ${maskApiKey(entry.apiKey)})`);
 
     try {
         const action = await resolveStorePlayback({
@@ -216,6 +227,8 @@ app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res)
             selectBestVideoFile
         });
 
+        console.log(`[Resolve] [${entry.service}] Action returned: "${action.type}"`);
+
         if (action.type === "redirect") {
             const rawFilename = action.filename || req.query.title || "video.mkv";
             const isMp4 = /\.mp4$/i.test(rawFilename) || /\[MP4\]/i.test(rawFilename);
@@ -223,16 +236,31 @@ app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res)
             const finalFilename = /\.(mkv|mp4|avi)$/i.test(rawFilename) ? rawFilename : `${rawFilename}${safeExt}`;
             const cleanAscii = finalFilename.replace(/[^\x20-\x7E]/g, "_");
 
+            console.log(`[Resolve] [${entry.service}] 🚀 307 Redirecting to stream: "${cleanAscii}"`);
+            console.log(`[Resolve] [${entry.service}] Stream URL: ${action.url.slice(0, 100)}...`);
+
             res.setHeader("Content-Disposition", `inline; filename="${cleanAscii}"; filename*=UTF-8''${encodeURIComponent(finalFilename)}`);
             res.setHeader("Content-Type", isMp4 ? "video/mp4" : "video/x-matroska");
             res.setHeader("Accept-Ranges", "bytes");
             return res.redirect(307, action.url);
         }
-        if (action.type === "archive") return serveArchiveVideo(req, res);
-        if (action.type === "not_found") return res.status(404).send(action.message || "Torrent is not playable.");
+        if (action.type === "archive") {
+            console.warn(`[Resolve] [${entry.service}] 📦 Torrent file not matched or archive pack not ready. Redirecting to archive.mp4`);
+            return serveArchiveVideo(req, res);
+        }
+        if (action.type === "not_found") {
+            console.error(`[Resolve] [${entry.service}] ❌ Torrent not playable: ${action.message || "Not playable"}`);
+            return res.status(404).send(action.message || "Torrent is not playable.");
+        }
+        console.warn(`[Resolve] [${entry.service}] ⏳ Stream downloading or pending. Redirecting to waiting.mp4`);
         return serveLoadingVideo(req, res);
     } catch (e) {
-        console.error("[Resolve Error] Core resolution failure: " + e.message);
+        const status = e.response ? e.response.status : null;
+        const errData = e.response?.data?.error || e.response?.data || null;
+        console.error(`[Resolve Error] [${entry.service}] Core resolution failure: ${e.message}`);
+        if (status) console.error(`[Resolve Error] [${entry.service}] HTTP Status: ${status}`);
+        if (errData) console.error(`[Resolve Error] [${entry.service}] Response body: ${typeof errData === 'object' ? JSON.stringify(errData) : errData}`);
+        console.warn(`[Resolve Error] [${entry.service}] Serving waiting.mp4 fallback video to player.`);
         return serveLoadingVideo(req, res);
     }
 });
