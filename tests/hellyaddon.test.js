@@ -218,7 +218,9 @@ test("isTVSeriesRelease and isMovieRelease accurately differentiate movies from 
         "[LoliHouse] Sword Art Online the Movie -Progressive- Aria of a Starless Night [1080p]",
         "[Moozzi2] Kono Subarashii Sekai ni Shukufuku wo! Kurenai Densetsu [BD 1080p]",
         "[VCB-Studio] Kimi no Na wa [1080p]",
-        "[VCB-Studio] Suzume no Tojimari / 铃芽之旅 10-bit 1080p HEVC BDRip"
+        "[VCB-Studio] Suzume no Tojimari / 铃芽之旅 10-bit 1080p HEVC BDRip",
+        "[7³ACG] 剧场版「进击的巨人」完结篇THE LAST ATTACK/Shingeki no Kyojin Movie: The Last Attack 2024 [简繁字幕] BDrip 1080p x265 OPUS 2.0",
+        "[Skymoon-Raws] 劇場版「進擊的巨人」完結篇 THE LAST ATTACK [Baha][WEB-DL][1080p][AVC AAC][CHT][MP4](字幕組招募翻校)"
     ];
     for (const title of movies) {
         assert.equal(isTVSeriesRelease(title), false, `Should NOT be TV series: ${title}`);
@@ -236,7 +238,8 @@ test("isTVSeriesRelease and isMovieRelease accurately differentiate movies from 
         "[SubsPlease] Violet Evergarden - 01 [1080p]",
         "[SubsPlease] One Piece - 1000 [1080p]",
         "【澄空学园】K-ON! 第二季 [01-26]",
-        "【豌豆字幕组】间谍过家家 [01] [1080p]"
+        "【豌豆字幕组】间谍过家家 [01] [1080p]",
+        "[TUcaptions] 2013春 // 進撃の巨人 / 進擊的巨人 / Attack On Titan // 13 // 1080P-MKV-BIG5(繁)【社員招募中!!】"
     ];
     for (const title of tvSeries) {
         assert.equal(isTVSeriesRelease(title), true, `Should be TV series: ${title}`);
@@ -380,4 +383,16 @@ test("resolveAnimeMetaFromTitle resolves western Cinemeta title with Romaji vari
     assert.ok(Array.isArray(meta.chineseTitles));
     assert.ok(meta.chineseTitles.some(t => t.includes("透明之夜")));
     assert.equal(meta.subjectId, 607340);
+});
+
+test("resolveAnimeMetaFromTitle accurately resolves movie title with subtitle to Bangumi movie subject", async () => {
+    const meta = await resolveAnimeMetaFromTitle("Attack on Titan the Movie: The Last Attack", { isMovie: true, year: 2024 });
+
+    assert.ok(meta);
+    assert.equal(meta.format, "MOVIE");
+    assert.equal(meta.isMovie, true);
+    assert.equal(meta.year, 2024);
+    assert.equal(meta.subjectId, 508708);
+    assert.ok(Array.isArray(meta.chineseTitles));
+    assert.ok(meta.chineseTitles.some(t => t.includes("THE LAST ATTACK")));
 });

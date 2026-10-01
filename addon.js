@@ -467,23 +467,31 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             } else { requestedEp = 1; }
         }
 
+        let cinemetaYear = null;
+        let cinemetaType = null;
         const metaTasks = [];
         if (id.startsWith("tt")) {
             metaTasks.push((async () => {
                 const imdbId = parts[0];
                 let name = "";
+                let metaYear = null;
+                let metaType = null;
                 try {
                     let res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`, { timeout: 4000 });
                     name = res.data?.meta?.name;
+                    metaYear = res.data?.meta?.year ? parseInt(res.data.meta.year, 10) : null;
+                    metaType = res.data?.meta?.type;
                 } catch(e) {}
                 if (!name) {
                     const otherType = type === "movie" ? "series" : "movie";
                     try {
                         let res2 = await axios.get(`https://v3-cinemeta.strem.io/meta/${otherType}/${imdbId}.json`, { timeout: 4000 });
                         name = res2.data?.meta?.name;
+                        metaYear = res2.data?.meta?.year ? parseInt(res2.data.meta.year, 10) : null;
+                        metaType = res2.data?.meta?.type;
                     } catch(e) {}
                 }
-                return { source: "cinemeta", name: name || "" };
+                return { source: "cinemeta", name: name || "", year: metaYear, type: metaType || type };
             })());
         }
         if (aniListId) {
@@ -494,25 +502,56 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         let freshMeta = null;
         metaResults.forEach(r => {
             if (!r) return;
-            if (r.source === "cinemeta") searchTitleFallback = r.name;
+            if (r.source === "cinemeta") {
+                searchTitleFallback = r.name;
+                cinemetaYear = r.year;
+                cinemetaType = r.type;
+            }
             if (r.source === "anilist") freshMeta = r.meta;
         });
+
+        const isMovie = type === "movie" || cinemetaType === "movie" || (freshMeta && (freshMeta.format === "MOVIE" || freshMeta.isMovie));
 
         // Translate Cinemeta / IMDb title to AniList/Bangumi to get Chinese titles
         if (id.startsWith("tt") && searchTitleFallback) {
              try {
-                const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback);
+                const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback, {
+                    isMovie,
+                    year: cinemetaYear,
+                    type: isMovie ? "movie" : type
+                });
                 if (extraMeta) {
                     freshMeta = extraMeta;
                 }
             } catch (e) {}
         } else if (!freshMeta && searchTitleFallback && !isRawSearch) {
              try {
-                const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback);
+                const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback, {
+                    isMovie,
+                    year: cinemetaYear,
+                    type: isMovie ? "movie" : type
+                });
                 if (extraMeta) {
                     freshMeta = extraMeta;
                 }
             } catch (e) {}
+        }
+
+        if (!freshMeta && searchTitleFallback) {
+            freshMeta = {
+                id,
+                name: searchTitleFallback,
+                englishName: searchTitleFallback,
+                chineseTitles: [],
+                format: isMovie ? "MOVIE" : "TV",
+                year: cinemetaYear,
+                episodes: isMovie ? 1 : null,
+                isMovie: isMovie
+            };
+        } else if (freshMeta && isMovie) {
+            freshMeta.isMovie = true;
+            freshMeta.format = "MOVIE";
+            if (!freshMeta.year && cinemetaYear) freshMeta.year = cinemetaYear;
         }
 
         if (!freshMeta && !searchTitleFallback) {
@@ -520,7 +559,12 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             return { "streams": [] };
         }
 
-        // Season detection from title string if not tt
+        if (isMovie) {
+            expectedSeason = 1;
+            requestedEp = 1;
+        }
+
+        // Season detection from title string if not tt and not movie
         const extractSeason = (t) => {
             const nthMatch = t.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:Season|Part|Cour)\b/i);
             if (nthMatch) return parseInt(nthMatch[1], 10);
@@ -534,7 +578,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             return null;
         };
 
-        if (!id.startsWith("tt") && !isRawSearch) {
+        if (!id.startsWith("tt") && !isRawSearch && !isMovie) {
             let detected = null;
             const sources = [searchTitleFallback, freshMeta?.name, freshMeta?.altName, ...(freshMeta?.chineseTitles || [])];
             for (let s of sources) {
@@ -548,8 +592,6 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             }
             if (detected) expectedSeason = detected;
         }
-
-        const isMovie = type === "movie" || (freshMeta && freshMeta.format === "MOVIE");
         const rawChineseTitles = (freshMeta && Array.isArray(freshMeta.chineseTitles)) ? freshMeta.chineseTitles : [];
         const expandedChineseTitles = new Set();
         rawChineseTitles.forEach(ct => {
@@ -617,7 +659,10 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         const seasonOffset = (freshMeta && Number.isFinite(freshMeta.seasonOffset)) ? freshMeta.seasonOffset : 0;
         const absoluteEp = seasonOffset + requestedEp;
 
-        console.log(`[HellyAddon] Show: "${freshMeta?.name || searchTitleFallback}" | Chinese: [${chineseTitles.join(", ")}] | Season: ${expectedSeason} | Ep: ${requestedEp} (Abs: ${absoluteEp}) | Movie: ${isMovie}`);
+        const episodeLog = isMovie 
+            ? "Movie: true" 
+            : `Season: ${expectedSeason} | Ep: ${requestedEp} (Abs: ${absoluteEp}) | Movie: false`;
+        console.log(`[HellyAddon] Show: "${freshMeta?.name || searchTitleFallback}" | Chinese: [${chineseTitles.join(", ")}] | ${episodeLog}`);
 
         // Canonical title collection for exact matching
         const allCanonicalTitles = [
@@ -922,7 +967,13 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 const p2pStream = buildP2PStream({
                     torrent: t,
                     parsed: parsedForP2P,
-                    canonical: freshMeta || null,
+                    canonical: freshMeta ? {
+                        ...freshMeta,
+                        isMovie,
+                        format: isMovie ? "MOVIE" : (freshMeta.format || "TV"),
+                        year: freshMeta.year || cinemetaYear,
+                        anilistId: aniListId || (freshMeta.id ? String(freshMeta.id).replace(/^anilist:/, "") : null)
+                    } : { isMovie, format: isMovie ? "MOVIE" : "TV", year: cinemetaYear, anilistId: aniListId || null },
                     requestedEp,
                     expectedSeason,
                     anilistId: aniListId || null,
@@ -938,8 +989,11 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
 
         const canonicalForFormatter = freshMeta ? {
             ...freshMeta,
+            isMovie,
+            format: isMovie ? "MOVIE" : (freshMeta.format || "TV"),
+            year: freshMeta.year || cinemetaYear,
             anilistId: aniListId || (freshMeta.id ? String(freshMeta.id).replace(/^anilist:/, "") : null)
-        } : { anilistId: aniListId || null };
+        } : { isMovie, format: isMovie ? "MOVIE" : "TV", year: cinemetaYear, anilistId: aniListId || null };
 
         const debridStreams = buildDebridStreams({
             torrents,

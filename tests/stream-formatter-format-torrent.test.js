@@ -73,3 +73,23 @@ test("formatToriiStream uses ☁️ for uncached and 📡 P2P for missing servic
     const o2 = formatToriiStream(p2p, { url: "magnet:?xt=...", behaviorHints: {} });
     assert.match(o2.name, /📡 P2P/);
 });
+
+test("formatToriiStream suppresses episode title line and ep count for movies", () => {
+    const movieEnriched = {
+        ...ENRICHED,
+        canonical: {
+            ...ENRICHED.canonical,
+            mainTitle: "Attack on Titan the Movie: The Last Attack",
+            englishTitle: "Attack on Titan the Movie: The Last Attack",
+            year: 2024,
+            format: "MOVIE",
+            isMovie: true,
+            episodeCount: 1,
+            episodeTitle: "To You, in 2000 Years"
+        }
+    };
+    const out = formatToriiStream(movieEnriched, { url: "x", behaviorHints: {} });
+    assert.match(out.description, /🎬 Attack on Titan the Movie: The Last Attack · 2024 · MOVIE/);
+    assert.doesNotMatch(out.description, /📺 S/);
+    assert.doesNotMatch(out.description, /1ep/);
+});
