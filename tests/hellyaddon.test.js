@@ -99,6 +99,34 @@ test("Parser rejects wrong season releases", () => {
 
     const s1Title = "【ANi】咒术回战 第一季 - 01 [1080P]";
     assert.equal(isWrongSeason(s1Title, 2), true);
+
+    // Attack on Titan: The Final Season must NOT be treated as Season 1 even if it contains "(part1)"
+    const aotFinal = "进击的巨人 The Final Season (part1) [60-75 Fin]";
+    assert.equal(extractSeasonNumber(aotFinal), 999);
+    assert.equal(isWrongSeason(aotFinal, 1), true);
+    assert.equal(isWrongSeason(aotFinal, 4), false);
+
+    // Title bracket season numbers: 【进击的巨人 3】 must be detected as Season 3
+    const aotS3 = "【进击的巨人 3】【01-22】";
+    assert.equal(extractSeasonNumber(aotS3), 3);
+    assert.equal(isWrongSeason(aotS3, 1), true);
+    assert.equal(isWrongSeason(aotS3, 3), false);
+
+    // Roman numeral season detection: Overlord IV, Mob Psycho 100 II
+    const overlordIV = "[Group] Overlord IV - 01 [1080p].mkv";
+    assert.equal(extractSeasonNumber(overlordIV), 4);
+    assert.equal(isWrongSeason(overlordIV, 1), true);
+    assert.equal(isWrongSeason(overlordIV, 4), false);
+
+    const mobII = "[Group] Mob Psycho 100 II - 01 [1080p].mkv";
+    assert.equal(extractSeasonNumber(mobII), 2);
+    assert.equal(isWrongSeason(mobII, 1), true);
+    assert.equal(isWrongSeason(mobII, 2), false);
+
+    // Multi-language subtitles like [EN/VI] must not be misidentified as Season 6
+    const multiLang = "[Group] Anime Title [EN/VI] - 01 [1080p].mkv";
+    assert.equal(extractSeasonNumber(multiLang), null);
+    assert.equal(isWrongSeason(multiLang, 1), false);
 });
 
 //=============================================================================
@@ -107,13 +135,28 @@ test("Parser rejects wrong season releases", () => {
 test("Parser detects season batch ranges and matches requested episode", () => {
     const batch1 = "【喵萌奶茶屋】[葬送的芙莉莲 / Frieren][01-28全集][1080p][简繁双语]";
     assert.equal(isSeasonBatch(batch1, 1), true);
+    // Episode 3 is within 1-28
+    assert.equal(isSeasonBatch(batch1, 1, 3, 3), true);
+    // Episode 30 is outside 1-28
+    assert.equal(isSeasonBatch(batch1, 1, 30, 30), false);
     const range1 = getBatchRange(batch1);
     assert.deepEqual(range1, { start: 1, end: 28 });
 
     const batch2 = "【桜都字幕组】鬼灭之刃 柱训练篇 [01~08] [1080p]";
     assert.equal(isSeasonBatch(batch2, 1), true);
+    assert.equal(isSeasonBatch(batch2, 1, 4, 4), true);
+    assert.equal(isSeasonBatch(batch2, 1, 10, 10), false);
     const range2 = getBatchRange(batch2);
     assert.deepEqual(range2, { start: 1, end: 8 });
+
+    // Attack on Titan: Final Season batch 60-75 must be rejected when searching for S1E3
+    const aotFinalBatch = "进击的巨人 The Final Season (part1) [60-75 Fin]";
+    assert.equal(isSeasonBatch(aotFinalBatch, 1, 3, 3), false);
+
+    // Season 1 batch 01-25 must be accepted when searching for S1E3
+    const aotS1Batch = "【进击的巨人 / Shingeki no Kyojin】【01-25 Fin】";
+    assert.equal(isSeasonBatch(aotS1Batch, 1, 3, 3), true);
+    assert.equal(isSeasonBatch(aotS1Batch, 1, 26, 26), false);
 });
 
 test("selectBestVideoFile picks the exact requested episode inside a season pack", () => {

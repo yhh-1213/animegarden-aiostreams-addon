@@ -833,7 +833,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         //===============
         if (!isMovie && !isRawSearch) {
             torrents = torrents.filter(t => {
-                const isBatch = isSeasonBatch(t.title, expectedSeason);
+                const isBatch = isSeasonBatch(t.title, expectedSeason, requestedEp, absoluteEp);
                 return isBatch || isEpisodeMatch(t.title, requestedEp, expectedSeason, absoluteEp);
             });
         }
@@ -900,7 +900,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 const bytes = parseSizeToBytes(t.size);
                 const streamLang = extractLanguage(t.title, userLangs);
                 const seeders = parseInt(t.seeders, 10) || 0;
-                const isBatch = isSeasonBatch(t.title, expectedSeason);
+                const isBatch = isSeasonBatch(t.title, expectedSeason, requestedEp, absoluteEp);
 
                 const parsedForP2P = buildParsedFromTitle(t.title, res, streamLang, isBatch, null);
                 const p2pStream = buildP2PStream({
