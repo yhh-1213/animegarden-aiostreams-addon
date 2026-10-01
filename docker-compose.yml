@@ -1,25 +1,25 @@
 #===============
-# DOCKER COMPOSE
+# DOCKER COMPOSE - HELLYADDON
 # Ensures internal networking is cleanly separated and logs are properly
 # rotated (max 10mb) to avoid disk exhaustion on smaller VPS machines.
 #
 # To deploy behind a public domain — set BASE_URL via a .env file next to
 # this compose.yml or via your shell environment, e.g.:
 #
-#   echo 'BASE_URL=https://torii.example.com' >> .env
+#   echo 'BASE_URL=https://helly.example.com' >> .env
 #   echo 'PORT=7002' >> .env
-#   docker compose up -d
+#   docker compose up -d --build
 #
 # BASE_URL is what the addon emits in its Stremio manifest (`logo`,
 # `bingeGroup`, install URLs, /resolve and /sub redirects). If unset it
 # falls back to http://127.0.0.1:7002, which only works for local installs.
 #===============
-name: "nexio-torii"
+name: "hellyaddon"
 
 services:
-  nexio-torii:
-    image: "ghcr.io/johnneerdael/nexio-torii:latest"
-    container_name: "nexio_torii"
+  hellyaddon:
+    build: .
+    container_name: "hellyaddon"
     restart: "unless-stopped"
     ports:
       - "${PORT:-7002}:${PORT:-7002}"
@@ -29,43 +29,7 @@ services:
       - "NODE_ENV=production"
       - "STREMTHRU_URL=${STREMTHRU_URL:-https://stremthrufortheweak.nhyira.dev/}"
     volumes:
-      - "nexio-torii-cache:/app/data"
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-    networks:
-      - "stremio-network"
-
-  nexio-torii-ingest:
-    image: "ghcr.io/johnneerdael/nexio-torii:latest"
-    container_name: "nexio_torii_ingest"
-    restart: "unless-stopped"
-    environment:
-      - "NODE_ENV=production"
-      - "CATALOG_DB_PATH=/app/data/catalog.sqlite"
-      - "ANIME_MAP_PATH=/app/data/anime/nexio-anime-map-v1.json"
-      - "ANIME_MAP_PROVENANCE_PATH=/app/data/anime/nexio-anime-map-provenance.json"
-      - "CATALOG_DAILY_INTERVAL_MS=86400000"
-      - "CATALOG_DAILY_LIMIT=${CATALOG_DAILY_LIMIT:-100}"
-      - "CATALOG_BACKFILL_MAX_PAGES=${CATALOG_BACKFILL_MAX_PAGES:-1000}"
-      - "CATALOG_BACKFILL_PAGE_DELAY_MS=${CATALOG_BACKFILL_PAGE_DELAY_MS:-250}"
-      - "ANIMETOSHO_TSV_URL=${ANIMETOSHO_TSV_URL:-}"
-      - "TMDB_API_KEY=${TMDB_API_KEY:-}"
-      - "TMDB_API_URL=${TMDB_API_URL:-https://api.themoviedb.org/3}"
-    volumes:
-      - "nexio-torii-cache:/app/data"
-    command:
-      [
-        "node", "scripts/catalog-daily-runner.js",
-        "--source", "all",
-        "--mode", "daily",
-        "--live",
-        "--limit", "${CATALOG_DAILY_LIMIT:-100}",
-        "--backfill-max-pages", "${CATALOG_BACKFILL_MAX_PAGES:-1000}",
-        "--backfill-page-delay-ms", "${CATALOG_BACKFILL_PAGE_DELAY_MS:-250}"
-      ]
+      - "hellyaddon-cache:/app/data"
     logging:
       driver: "json-file"
       options:
@@ -80,5 +44,5 @@ networks:
     driver: "bridge"
 
 volumes:
-  nexio-torii-cache:
-    name: "nexio-torii-cache"
+  hellyaddon-cache:
+    name: "hellyaddon-cache"

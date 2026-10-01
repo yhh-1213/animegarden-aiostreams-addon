@@ -1,13 +1,13 @@
 #===============
-# DOCKERFILE
+# DOCKERFILE - HELLYADDON
 # Minimal Alpine footprint, strips out development dependencies, 
 # and automatically pulls the loading screen MP4s directly into the static folder.
 #===============
-FROM node:18-alpine
+FROM node:20-alpine
 
-LABEL org.opencontainers.image.title="Nexio Torii" \
-      org.opencontainers.image.description="Stremio anime streams addon backed by Nyaa and StremThru premium unlockers" \
-      org.opencontainers.image.source="https://github.com/johnneerdael/nexio-torii"
+LABEL org.opencontainers.image.title="HellyAddon" \
+      org.opencontainers.image.description="Stremio anime streams addon with Anime Garden, exact title matching, and Debrid optimizations" \
+      org.opencontainers.image.source="https://github.com/yhh-1213/animegarden-aiostreams-addon"
 
 WORKDIR /app
 
