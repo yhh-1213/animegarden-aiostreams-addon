@@ -13,6 +13,8 @@ const {
     getBatchRange,
     isSeasonBatch,
     isEpisodeMatch,
+    isMovieRelease,
+    isTVSeriesRelease,
     detectChineseSubtitle,
     detectChineseFansubGroup,
     inspectChineseSubtitle,
@@ -199,6 +201,73 @@ test("selectBestVideoFile handles Windows backslash paths without falling back t
     const selected = selectBestVideoFile(files, 1, 1, false);
     assert.ok(selected);
     assert.equal(selected.id, "e1");
+});
+
+test("isTVSeriesRelease and isMovieRelease accurately differentiate movies from TV series", () => {
+    // 1. Movies must NOT be detected as TV series
+    const movies = [
+        "【豌豆字幕组】鬼灭之刃 剧场版 无限列车篇 BDRip 1080p",
+        "[Kamigami] Kimetsu no Yaiba - The Movie Mugen Ressha-hen [1080p]",
+        "[SweetSub] Gekijouban Jujutsu Kaisen 0 [BDRip 1080p]",
+        "[SubsPlease] Jujutsu Kaisen 0 (Movie) [1080p]",
+        "[SubsPlease] Jujutsu Kaisen 0 (1080p) [B38B124C].mkv",
+        "[Kamigami] Violet Evergarden The Movie [BDRip 1080p]",
+        "【桜都字幕组】紫罗兰永恒花园 剧场版 [1080p]",
+        "[Erai-raws] One Piece Film Red [1080p]",
+        "[Leopard-Raws] Spy x Family Movie - Code White (B-Global 1920x1080)",
+        "[LoliHouse] Sword Art Online the Movie -Progressive- Aria of a Starless Night [1080p]",
+        "[Moozzi2] Kono Subarashii Sekai ni Shukufuku wo! Kurenai Densetsu [BD 1080p]",
+        "[VCB-Studio] Kimi no Na wa [1080p]",
+        "[VCB-Studio] Suzume no Tojimari / 铃芽之旅 10-bit 1080p HEVC BDRip"
+    ];
+    for (const title of movies) {
+        assert.equal(isTVSeriesRelease(title), false, `Should NOT be TV series: ${title}`);
+    }
+
+    // 2. TV Series must be detected as TV series
+    const tvSeries = [
+        "【极影字幕社】鬼灭之刃 无限列车篇 第01话 720p",
+        "【喵萌奶茶屋】鬼灭之刃 无限列车篇 TV版 01-07 [1080p]",
+        "[SubsPlease] Kimetsu no Yaiba: Mugen Ressha-hen - 01 [1080p].mkv",
+        "[Judas] Kimetsu no Yaiba: Mugen Ressha-hen (TV) [1080p]",
+        "【ANi】咒术回战 - 01 [1080P]",
+        "【喵萌奶茶屋】咒术回战 [01-24全集]",
+        "【桜都字幕组】紫罗兰永恒花园 [01-13全集]",
+        "[SubsPlease] Violet Evergarden - 01 [1080p]",
+        "[SubsPlease] One Piece - 1000 [1080p]",
+        "【澄空学园】K-ON! 第二季 [01-26]",
+        "【豌豆字幕组】间谍过家家 [01] [1080p]"
+    ];
+    for (const title of tvSeries) {
+        assert.equal(isTVSeriesRelease(title), true, `Should be TV series: ${title}`);
+    }
+
+    // 3. Movie keywords
+    assert.equal(isMovieRelease("【豌豆字幕组】鬼灭之刃 剧场版 无限列车篇 BDRip 1080p"), true);
+    assert.equal(isMovieRelease("[Kamigami] Violet Evergarden The Movie [BDRip 1080p]"), true);
+    assert.equal(isMovieRelease("[Erai-raws] One Piece Film Red [1080p]"), true);
+    assert.equal(isMovieRelease("[SubsPlease] Violet Evergarden - 01 [1080p]"), false);
+});
+
+test("selectBestVideoFile rejects TV season packs when requesting a movie", () => {
+    const size = 500 * 1024 * 1024;
+    const tvPackFiles = [
+        { id: "e1", name: "[桜都字幕组] 紫罗兰永恒花园 - 01.mkv", size },
+        { id: "e2", name: "[桜都字幕组] 紫罗兰永恒花园 - 02.mkv", size },
+        { id: "e3", name: "[桜都字幕组] 紫罗兰永恒花园 - 03.mkv", size }
+    ];
+    // When isMovie === true, selecting from a TV episode pack must return null
+    const result = selectBestVideoFile(tvPackFiles, 1, 1, true);
+    assert.equal(result, null);
+
+    // For a legitimate movie release with a main feature and trailer
+    const movieFiles = [
+        { id: "movie", name: "[Kamigami] Violet Evergarden The Movie [1080p].mkv", size: 4 * 1024 * 1024 * 1024 },
+        { id: "trailer", name: "[Kamigami] Trailer.mkv", size: 50 * 1024 * 1024 }
+    ];
+    const movieResult = selectBestVideoFile(movieFiles, 1, 1, true);
+    assert.ok(movieResult);
+    assert.equal(movieResult.id, "movie");
 });
 
 //=============================================================================

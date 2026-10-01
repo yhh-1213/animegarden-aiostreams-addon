@@ -95,3 +95,58 @@ test("filterByCanonical keeps Chinese anime movie releases without title-distanc
     assert.equal(kept.length, 4);
     assert.ok(kept.every(t => t._matchScore >= 100));
 });
+
+test("filterByCanonical drops TV series releases when canonical is a MOVIE", async () => {
+    const canonicalMugenTrainMovie = {
+        format: "MOVIE",
+        year: 2020,
+        episodeCount: 1,
+        mainTitle: "Kimetsu no Yaiba: Mugen Ressha-hen",
+        englishTitle: "Demon Slayer: Kimetsu no Yaiba the Movie: Mugen Train",
+        altName: "Demon Slayer: Kimetsu no Yaiba the Movie: Mugen Train",
+        nativeName: "鬼滅の刃 無限列車編",
+        synonyms: [
+            "鬼灭之刃 剧场版 无限列车篇",
+            "鬼灭之刃 无限列车篇",
+            "劇場版 鬼滅之刃 無限列車篇"
+        ]
+    };
+
+    const torrents = [
+        { title: "【豌豆字幕组】鬼灭之刃 剧场版 无限列车篇 BDRip 1080p", hash: "movie1" },
+        { title: "[Kamigami] Kimetsu no Yaiba - The Movie Mugen Ressha-hen [1080p]", hash: "movie2" },
+        // TV arc episode releases with similar names that must be dropped
+        { title: "【极影字幕社】鬼灭之刃 无限列车篇 第01话 720p", hash: "tv_ep1" },
+        { title: "【喵萌奶茶屋】鬼灭之刃 无限列车篇 TV版 01-07 [1080p]", hash: "tv_batch" },
+        { title: "[SubsPlease] Kimetsu no Yaiba: Mugen Ressha-hen - 01 [1080p].mkv", hash: "tv_subsp" }
+    ];
+
+    const { kept, dropped } = await filterByCanonical({ canonical: canonicalMugenTrainMovie, torrents });
+    const keptHashes = kept.map(t => t.hash);
+    const droppedHashes = dropped.map(d => d.torrent.hash);
+
+    assert.deepEqual(keptHashes.sort(), ["movie1", "movie2"].sort());
+    assert.deepEqual(droppedHashes.sort(), ["tv_batch", "tv_ep1", "tv_subsp"].sort());
+});
+
+test("filterByCanonical drops standalone movie releases when canonical is TV series", async () => {
+    const canonicalDemonSlayerTV = {
+        mainTitle: "Kimetsu no Yaiba",
+        englishTitle: "Demon Slayer: Kimetsu no Yaiba",
+        synonyms: ["鬼灭之刃"],
+        format: "TV",
+        year: 2019,
+        episodeCount: 26
+    };
+
+    const torrents = [
+        { title: "[SubsPlease] Kimetsu no Yaiba - 01 [1080p].mkv", hash: "tv_good" },
+        { title: "【豌豆字幕组】鬼灭之刃 剧场版 无限列车篇 BDRip 1080p", hash: "movie_bad" }
+    ];
+
+    const { kept, dropped } = await filterByCanonical({ canonical: canonicalDemonSlayerTV, torrents });
+    assert.equal(kept.length, 1);
+    assert.equal(kept[0].hash, "tv_good");
+    assert.equal(dropped.length, 1);
+    assert.equal(dropped[0].torrent.hash, "movie_bad");
+});

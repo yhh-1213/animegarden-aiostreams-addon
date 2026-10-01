@@ -35,8 +35,10 @@ const {
     extractEpisodes,
     getBatchRange,
     isEpisodeMatch,
+    isMovieRelease,
     selectBestVideoFile,
     isSeasonBatch,
+    isTVSeriesRelease,
     isWrongSeason,
     toSimplifiedChinese,
     toTraditionalChinese,
@@ -565,9 +567,11 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                                     .replace(/\s*(?:剧场版|劇場版|电影|電影)$/i, "")
                                     .trim();
             if (strippedMovie && strippedMovie.length >= 2) {
-                expandedChineseTitles.add(strippedMovie);
-                expandedChineseTitles.add(toSimplifiedChinese(strippedMovie));
-                expandedChineseTitles.add(toTraditionalChinese(strippedMovie));
+                if (!isMovie || isMovieRelease(ct) && (isMovieRelease(strippedMovie) || strippedMovie.length > 6)) {
+                    expandedChineseTitles.add(strippedMovie);
+                    expandedChineseTitles.add(toSimplifiedChinese(strippedMovie));
+                    expandedChineseTitles.add(toTraditionalChinese(strippedMovie));
+                }
             }
 
             // Base title without season tags
@@ -815,6 +819,18 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             if (!torrents.length) {
                 console.log(`[HellyAddon] Warning: All torrents rejected by canonical filter for ${id} (${freshMeta.name})`);
                 return { "streams": [], "cacheMaxAge": 60 };
+            }
+        }
+
+        //===============
+        // MOVIE / TV DISCRIMINATION GATE
+        // Strict boundary separating theatrical films from episodic TV series
+        //===============
+        if (!isRawSearch) {
+            if (isMovie) {
+                torrents = torrents.filter(t => !isTVSeriesRelease(t.title));
+            } else {
+                torrents = torrents.filter(t => !isMovieRelease(t.title) || isTVSeriesRelease(t.title));
             }
         }
 
