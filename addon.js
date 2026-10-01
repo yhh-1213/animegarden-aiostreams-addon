@@ -1,17 +1,49 @@
 //===============
-// NEXIO TORII STREMIO ADDON - CORE LOGIC
-// (Consistent UI + StremThru Cache + Strict Episode Enforcing + Dynamic Season & Episode Extraction)
-// P2P Integration: Direct infoHash handover to Stremio including Tracker-Injection.
-// Explicit Resolution Toggles & Fixed Movie Manifest.
+// HELLYADDON STREMIO ADDON - CORE ENGINE
+// High-precision anime scraper powered by Anime Garden & Nyaa.
+// Features:
+// - Exact Title Matching (multi-lingual: Chinese, Romaji, English, Japanese Native)
+// - Anime Garden Open API Integration (https://animes.garden/docs/api)
+// - Full Season Pack / Batch Compatibility (accurate file selection inside packs)
+// - Absolute Anime Numbering Compatibility (supports multi-season continuation & dual-numbering)
+// - Priority & strict filtering for anime with Chinese subtitles (CHS, CHT, Dual)
+// - TorBox & PikPak premium debrid stream unlocking via StremThru + optional P2P mode
+// - Support for both Anime Movies and Anime Series
 //===============
 
 const { addonBuilder } = require("stremio-addon-sdk");
 const axios = require("axios");
-const { searchAnime, getAnimeMeta, getTrendingAnime, getTopAnime, getAiringAnime, getSeasonalAnime, getJikanMeta, fetchEpisodeDetails, getCurrentSeasonInfo } = require("./lib/anilist");
+const {
+    searchAnime,
+    resolveAnimeMetaFromTitle,
+    getAnimeMeta,
+    getTrendingAnime,
+    getTopAnime,
+    getAiringAnime,
+    getSeasonalAnime,
+    getJikanMeta,
+    fetchEpisodeDetails,
+    getCurrentSeasonInfo,
+    getBangumiSubject
+} = require("./lib/anilist");
+const { searchAnimeGardenForAnime } = require("./lib/animegarden");
 const { searchNyaaForAnime } = require("./lib/nyaa");
 const { encodeConfigPayload, fromBase64Safe, parseConfig, toBase64Safe } = require("./lib/config");
 const { buildDebridStreams, buildP2PStream, buildParsedFromTitle, dedupeTorrentsByExactSize } = require("./lib/stream-builder");
-const { extractEpisodeNumber, getBatchRange, isEpisodeMatch, selectBestVideoFile, isSeasonBatch, verifyTitleMatch } = require("./lib/parser");
+const {
+    extractEpisodeNumber,
+    extractEpisodes,
+    getBatchRange,
+    isEpisodeMatch,
+    selectBestVideoFile,
+    isSeasonBatch,
+    isWrongSeason,
+    toSimplifiedChinese,
+    toTraditionalChinese,
+    verifyExactTitleMatch,
+    verifyTitleMatch,
+    detectChineseSubtitle
+} = require("./lib/parser");
 const { getTorrentsForStream } = require("./lib/cache/stream-cache");
 const { buildMediaKey } = require("./lib/cache/torrent-cache");
 const { checkStoreTorzWithCache } = require("./lib/cache/debrid-cache");
@@ -20,13 +52,8 @@ const { filterByCanonical } = require("./lib/normalizer/match");
 let BASE_URL = process.env.BASE_URL || "http://127.0.0.1:7002";
 BASE_URL = BASE_URL.replace(/\/+$/, "");
 
-const FLARESOLVERR_URL = process.env.FLARESOLVERR_URL || null;
-
 //===============
-// GLOBAL CONCURRENCY LIMITER (Anti-Self-DDoS)
-// Limits the amount of concurrent outgoing requests to external trackers.
-// This prevents IP bans from services like Nyaa when Stremio fires multiple
-// search requests simultaneously.
+// GLOBAL CONCURRENCY LIMITER
 //===============
 const MAX_CONCURRENT_SCRAPES = 5;
 let activeScrapes = 0;
@@ -58,21 +85,11 @@ async function enqueueScrape(queryFn) {
     });
 }
 
-//===============
-// TITLE PREFERENCE APPLIER
-// Swaps the default Romaji titles with English ones if the user has 
-// configured "useEnglishTitles" in their addon settings.
-//===============
 function applyTitlePreference(metas, userConfig) {
     if (!userConfig.useEnglishTitles || !metas) return metas;
     return metas.map(m => ({ ...m, name: m.englishName || m.name }));
 }
 
-//===============
-// SIZE PARSER
-// Converts human-readable file sizes (e.g., "1.5 GB") into raw bytes
-// to allow mathematically accurate sorting of streams later on.
-//===============
 function parseSizeToBytes(sizeStr) {
     if (!sizeStr || typeof sizeStr !== "string") return 0;
     const match = sizeStr.match(/([\d.]+)\s*(GB|MB|KB|GiB|MiB|KiB|B)/i);
@@ -84,11 +101,6 @@ function parseSizeToBytes(sizeStr) {
     return val * 1024;
 }
 
-//===============
-// RESOLUTION TAG EXTRACTOR
-// Scans the torrent title for common resolution indicators and standardizes
-// them into predefined tags for filtering and UI presentation.
-//===============
 function extractTags(title) {
     let res = "SD";
     if (/(4320p|8k|FUHD)/i.test(title)) res = "8K";
@@ -102,10 +114,12 @@ function extractTags(title) {
 
 //===============
 // LANGUAGE MATRIX
-// Contains robust Regular Expressions to detect audio and subtitle 
-// languages from standard anime fan-sub naming conventions.
 //===============
 const LANG_REGEX = {
+    "CHI_SIMP": /\b(chs|gb|sc|zh-cn|zh-hans|schinese)\b|简|简体|简中|简日|内嵌简中/i,
+    "CHI_TRAD": /\b(cht|big5|tc|zh-tw|zh-hk|zh-hant|tchinese)\b|繁|繁体|繁中|繁日|内嵌繁中/i,
+    "CHI_DUAL": /双语|雙語|简繁|簡繁|中日|中字|中文字幕|中文内嵌|内嵌中字/i,
+    "CHI": /\b(chi|chinese|chs|cht|mandarin|zh-cn|zh-tw|zh)\b|(?:^|[\[\(\-_ ])(zh)(?:[\]\)\-_ ]|$)|(简|繁|中文字幕|中文)/i,
     "GER": /\b(ger|deu|german|deutsch|de-de)\b|(?:^|[\[\(\-_ ])(de)(?:[\]\)\-_ ]|$)/i,
     "FRE": /\b(fre|fra|french|vostfr|vf|fr-fr)\b|(?:^|[\[\(\-_ ])(fr)(?:[\]\)\-_ ]|$)/i,
     "ITA": /\b(ita|italian|it-it)\b|(?:^|[\[\(\-_ ])(it)(?:[\]\)\-_ ]|$)/i,
@@ -114,7 +128,6 @@ const LANG_REGEX = {
     "RUS": /\b(rus|russian|ru-ru)\b|(?:^|[\[\(\-_ ])(ru)(?:[\]\)\-_ ]|$)/i,
     "POR": /\b(por|pt-br|portuguese|pt-pt)\b|(?:^|[\[\(\-_ ])(pt)(?:[\]\)\-_ ]|$)/i,
     "ARA": /\b(ara|arabic|ar-sa)\b|(?:^|[\[\(\-_ ])(ar)(?:[\]\)\-_ ]|$)/i,
-    "CHI": /\b(chi|chinese|chs|cht|mandarin|zh-cn|zh-tw)\b|(?:^|[\[\(\-_ ])(zh)(?:[\]\)\-_ ]|$)|(简|繁|中文字幕)/i,
     "KOR": /\b(kor|korean|ko-kr)\b|(?:^|[\[\(\-_ ])(ko)(?:[\]\)\-_ ]|$)/i,
     "HIN": /\b(hin|hindi|hi-in)\b|(?:^|[\[\(\-_ ])(hi)(?:[\]\)\-_ ]|$)/i,
     "POL": /\b(pol|polish|pl-pl)\b|(?:^|[\[\(\-_ ])(pl)(?:[\]\)\-_ ]|$)/i,
@@ -127,12 +140,14 @@ const LANG_REGEX = {
     "MULTI": /(multi|dual|multi-audio|multi-sub)/i
 };
 
-//===============
-// LANGUAGE EXTRACTOR
-// Checks the title against the user's preferred languages first,
-// falling back to multi-audio, English, or Japanese raw status.
-//===============
 function extractLanguage(title, userLangs = []) {
+    const sub = detectChineseSubtitle(title);
+    if (sub.hasChinese) {
+        if (userLangs.includes(sub.type)) return sub.type;
+        if (userLangs.includes("CHI")) return sub.type;
+        return sub.type;
+    }
+
     const lower = title.toLowerCase();
     for (let lang of userLangs) {
         if (LANG_REGEX[lang] && LANG_REGEX[lang].test(lower)) return lang;
@@ -143,11 +158,6 @@ function extractLanguage(title, userLangs = []) {
     return "ENG"; 
 }
 
-//===============
-// SEARCH QUERY SANITIZER
-// Removes special characters, brackets, and excessive whitespace from
-// raw titles to formulate a clean query string for external trackers.
-//===============
 function sanitizeSearchQuery(title) { 
     if (!title) return "";
     return title.replace(/\(.*?\)/g, "")
@@ -159,45 +169,50 @@ function sanitizeSearchQuery(title) {
 
 //===============
 // STREMIO ADDON MANIFEST
-// Defines the capabilities, catalogs, and ID prefixes the addon supports.
 //===============
 const manifest = {
-    "id": "org.community.nexiotorii", "version": "9.6.1", "name": "Nexio Torii", "logo": BASE_URL + "/favicon.png",
-    "description": "Anime streams from Nyaa through StremThru-backed premium unlockers and optional P2P.",
-    "stremioAddonsConfig": {
-        "issuer": "https://stremio-addons.net",
-        "signature": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMTI4Q0JDLUhTMjU2In0..V414tKUupDmAK_As1LDd7A.1CKaSXDyaR_i0nVYBh-EYL9J_nuHCwiPCKoR_ALYEN7nqd0SLP3HLkuSKVqsBNYBqjzqfGYpRpAmlCntou1u6G2u1tPD3jVv6EMmGFqEG-HZVbdvjsP-OGt57e8Ar8Qm.X3iPFlRXb8scSMprT-fFrg"
-    },
+    "id": "org.community.hellyaddon",
+    "version": "1.0.0",
+    "name": "HellyAddon",
+    "logo": BASE_URL + "/favicon.png",
+    "description": "High-precision anime scraper powered by Anime Garden & Nyaa with exact title matching, season pack support, Chinese subtitles priority, and TorBox & PikPak.",
     "types": ["anime", "movie", "series"],
     "resources": [
         "catalog",
         {
             "name": "meta",
             "types": ["anime", "movie", "series"],
-            "idPrefixes": ["anilist:", "nexio_raw:"]
+            "idPrefixes": ["anilist:", "helly_raw:", "nexio_raw:"]
         },
         {
             "name": "stream",
             "types": ["anime", "movie", "series"],
-            "idPrefixes": ["anilist:", "nyaa:", "kitsu:", "tt", "nexio_raw:"]
+            "idPrefixes": ["anilist:", "nyaa:", "kitsu:", "tt", "helly_raw:", "nexio_raw:"]
         }
     ],
     "catalogs": [
-        { "id": "nexio_seasonal_series", "type": "anime", "name": "Nexio Torii Current Season" },
-        { "id": "nexio_airing_series", "type": "anime", "name": "Nexio Torii Currently Airing" },
-        { "id": "nexio_trending_series", "type": "anime", "name": "Nexio Torii Trending Series" },
-        { "id": "nexio_top_series", "type": "anime", "name": "Nexio Torii Top Rated Series" },
-        { "id": "nexio_trending_movie", "type": "movie", "name": "Nexio Torii Trending Movies" },
-        { "id": "nexio_top_movie", "type": "movie", "name": "Nexio Torii Top Rated Movies" },
-        { "id": "nexio_search", "type": "anime", "name": "Nexio Torii Search", "extra": [{ "name": "search", "isRequired": true }] },
-        { "id": "nexio_search", "type": "movie", "name": "Nexio Torii Search", "extra": [{ "name": "search", "isRequired": true }] },
-        { "id": "nexio_search", "type": "series", "name": "Nexio Torii Series", "extra": [{ "name": "search", "isRequired": true }] }
+        { "id": "helly_seasonal_series", "type": "anime", "name": "HellyAddon Current Season" },
+        { "id": "helly_airing_series", "type": "anime", "name": "HellyAddon Currently Airing" },
+        { "id": "helly_trending_series", "type": "anime", "name": "HellyAddon Trending Series" },
+        { "id": "helly_top_series", "type": "anime", "name": "HellyAddon Top Rated Series" },
+        { "id": "helly_trending_movie", "type": "movie", "name": "HellyAddon Trending Movies" },
+        { "id": "helly_top_movie", "type": "movie", "name": "HellyAddon Top Rated Movies" },
+        { "id": "helly_search", "type": "anime", "name": "HellyAddon Search", "extra": [{ "name": "search", "isRequired": true }] },
+        { "id": "helly_search", "type": "movie", "name": "HellyAddon Search", "extra": [{ "name": "search", "isRequired": true }] },
+        { "id": "helly_search", "type": "series", "name": "HellyAddon Series", "extra": [{ "name": "search", "isRequired": true }] }
     ],
-    "config": [{ "key": "NexioTorii", "type": "text", "title": "Nexio Torii Internal Payload" }],
+    "config": [{ "key": "HellyAddon", "type": "text", "title": "HellyAddon Internal Payload" }],
     "behaviorHints": { "configurable": true, "configurationRequired": true }
 };
 
 const CATALOG_CONFIG_KEYS = {
+    helly_seasonal_series: "showSeasonalSeries",
+    helly_airing_series: "showAiringSeries",
+    helly_trending_series: "showTrendingSeries",
+    helly_top_series: "showTopSeries",
+    helly_trending_movie: "showTrendingMovies",
+    helly_top_movie: "showTopMovies",
+    helly_search: "showSearchCatalog",
     nexio_seasonal_series: "showSeasonalSeries",
     nexio_airing_series: "showAiringSeries",
     nexio_trending_series: "showTrendingSeries",
@@ -214,159 +229,164 @@ function configuredManifest(config) {
         if (!key) return true;
         return userConfig[key] !== false;
     });
-    return { ...manifest, catalogs };
+    const isConfigured = Boolean(
+        (userConfig.debridServices && userConfig.debridServices.length > 0) ||
+        userConfig.enableP2P
+    );
+    return {
+        ...manifest,
+        catalogs,
+        behaviorHints: {
+            ...manifest.behaviorHints,
+            configurationRequired: !isConfigured
+        }
+    };
 }
 
 const builder = new addonBuilder(manifest);
 
 //===============
 // CATALOG HANDLER
-// Processes requests for the Stremio discover board (Trending, Top, Airing).
-// Also manages the search functionality, querying multiple sources and generating
-// a fallback "RAW SEARCH" card if standard metadata APIs fail to find a match.
 //===============
 builder.defineCatalogHandler(async ({ type, id, extra, config }) => {
     try {
         const userConfig = parseConfig(config);
 
-        if (id === "nexio_seasonal_series" && userConfig.showSeasonalSeries !== false) {
+        if ((id === "helly_seasonal_series" || id === "nexio_seasonal_series") && userConfig.showSeasonalSeries !== false) {
             const results = await getSeasonalAnime("anime");
             return { "metas": applyTitlePreference(results.filter(m => m.type === type), userConfig), "cacheMaxAge": 14400 };
         }
-        if (id === "nexio_airing_series" && userConfig.showAiringSeries !== false) {
+        if ((id === "helly_airing_series" || id === "nexio_airing_series") && userConfig.showAiringSeries !== false) {
             const results = await getAiringAnime("anime");
             return { "metas": applyTitlePreference(results.filter(m => m.type === type), userConfig), "cacheMaxAge": 14400 };
         }
-        if (id === "nexio_trending_series" && userConfig.showTrendingSeries !== false) {
+        if ((id === "helly_trending_series" || id === "nexio_trending_series") && userConfig.showTrendingSeries !== false) {
             const results = await getTrendingAnime("anime");
             return { "metas": applyTitlePreference(results.filter(m => m.type === type), userConfig), "cacheMaxAge": 21600 };
         }
-        if (id === "nexio_top_series" && userConfig.showTopSeries !== false) {
+        if ((id === "helly_top_series" || id === "nexio_top_series") && userConfig.showTopSeries !== false) {
             const results = await getTopAnime("anime");
             return { "metas": applyTitlePreference(results.filter(m => m.type === type), userConfig), "cacheMaxAge": 86400 };
         }
-        if (id === "nexio_trending_movie" && userConfig.showTrendingMovies !== false) {
+        if ((id === "helly_trending_movie" || id === "nexio_trending_movie") && userConfig.showTrendingMovies !== false) {
             const results = await getTrendingAnime("movie");
             return { "metas": applyTitlePreference(results.filter(m => m.type === type), userConfig), "cacheMaxAge": 21600 };
         }
-        if (id === "nexio_top_movie" && userConfig.showTopMovies !== false) {
+        if ((id === "helly_top_movie" || id === "nexio_top_movie") && userConfig.showTopMovies !== false) {
             const results = await getTopAnime("movie");
             return { "metas": applyTitlePreference(results.filter(m => m.type === type), userConfig), "cacheMaxAge": 86400 };
         }
 
-        if (id === "nexio_search" && extra.search && userConfig.showSearchCatalog !== false) {
-            const nyaaPromise = searchNyaaForAnime(extra.search).catch(() => []);
-            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve([]), 3500));
-
-            const [anilistRes, cinemetaRes, nyaaRes] = await Promise.all([
-                searchAnime(extra.search).catch(() => []),
-                axios.get(`https://v3-cinemeta.strem.io/catalog/${type}/top/search=${encodeURIComponent(extra.search)}.json`, { timeout: 4000 }).then(res => res.data.metas || []).catch(() => []),
-                Promise.race([nyaaPromise, timeoutPromise])
-            ]);
-
-            const results = [];
-            const seenIds = new Set();
-
-            const mappedAnilist = applyTitlePreference(anilistRes.filter(m => m.type === type), userConfig);
-            mappedAnilist.forEach(m => {
-                results.push(m);
-                seenIds.add(m.id);
-            });
-
-            cinemetaRes.forEach(m => {
-                if (!seenIds.has(m.id)) {
-                    results.push(m);
-                    seenIds.add(m.id);
-                }
-            });
-
-            // Fallback generation for obscure searches
-            if (results.length < 2 && nyaaRes.length > 0) {
-                results.push({
-                    "id": `nexio_raw:${type}:${toBase64Safe(extra.search)}`,
-                    "type": type,
-                    "name": extra.search + " (RAW SEARCH)",
-                    "poster": `https://dummyimage.com/600x900/1a1a1a/42a5f5.png?text=${encodeURIComponent(extra.search)}\nRaw+Search`,
-                    "background": `https://dummyimage.com/1920x1080/1a1a1a/42a5f5.png?text=${encodeURIComponent(extra.search)}`,
-                    "description": `Found ${nyaaRes.length} raw torrents. Use this if no official metadata matches.`
-                });
+        if ((id === "helly_search" || id === "nexio_search") && userConfig.showSearchCatalog !== false && extra && extra.search) {
+            const query = extra.search;
+            let results = await searchAnime(query);
+            
+            if (results && results.length > 0) {
+                return { "metas": applyTitlePreference(results.filter(m => m.type === type), userConfig), "cacheMaxAge": 3600 };
+            }
+            
+            const jikanResults = await getJikanMeta(query);
+            if (jikanResults) {
+                return { "metas": applyTitlePreference([jikanResults].filter(m => m.type === type), userConfig), "cacheMaxAge": 3600 };
             }
 
-            return { "metas": results, "cacheMaxAge": 86400 };
+            const rawB64 = toBase64Safe(query);
+            const fallbackCard = {
+                "id": `helly_raw:${type}:${rawB64}`,
+                "type": type,
+                "name": `${query.toUpperCase()}`,
+                "poster": "https://placehold.co/600x900/0a0a0c/42a5f5/png?text=" + encodeURIComponent(query.toUpperCase()) + "&font=playfair-display",
+                "background": "https://placehold.co/1920x1080/0a0a0c/1a1a24/png?text=" + encodeURIComponent(query.toUpperCase()),
+                "description": `🌸 Direct Tracker Search for: "${query}".`,
+                "releaseInfo": "DIRECT SEARCH"
+            };
+            return { "metas": [fallbackCard], "cacheMaxAge": 3600 };
         }
-        
+
         return { "metas": [] };
-    } catch (e) { return { "metas": [] }; }
+    } catch (e) {
+        return { "metas": [] };
+    }
 });
 
 //===============
 // META HANDLER
-// Provides the detailed view for a single item (description, episodes, poster).
-// Capable of dynamically generating fake metadata for "RAW SEARCH" items so
-// the user can still select an episode and trigger the stream handler.
 //===============
 builder.defineMetaHandler(async ({ type, id, config }) => {
     try {
         const userConfig = parseConfig(config);
 
-        if (id.startsWith("nexio_raw:")) {
+        if (id.startsWith("helly_raw:") || id.startsWith("nexio_raw:")) {
             const parts = id.split(":");
             const mType = parts[1];
-            const query = fromBase64Safe(parts[2]);
-            const rawMeta = {
-                "id": id, "type": mType, "name": query + " (Raw Search)",
-                "poster": `https://dummyimage.com/600x900/1a1a1a/42a5f5.png?text=${encodeURIComponent(query)}\nRaw+Search`,
-                "background": `https://dummyimage.com/1920x1080/1a1a1a/42a5f5.png?text=${encodeURIComponent(query)}`,
-                "description": `Dynamically generated metadata for "${query}".`,
-            };
-            if (mType === "series" || mType === "anime") {
-                rawMeta.videos = [];
-                for (let s = 1; s <= 10; s++) {
-                    for (let e = 1; e <= 100; e++) {
-                        rawMeta.videos.push({
-                            "id": `${id}-${e}`,
-                            "title": `Episode ${e}`,
-                            "season": s,
-                            "episode": e
-                        });
-                    }
-                }
-            } else if (mType === "movie") {
-                rawMeta.videos = [{
-                    "id": id,
-                    "title": query || "Movie",
-                    "released": new Date().toISOString()
-                }];
-                rawMeta.behaviorHints = { "defaultVideoId": id };
+            const rawPayload = parts[2];
+            let rawQuery = "";
+            let epNum = 1;
+            
+            if (rawPayload && rawPayload.includes("-")) {
+                let subParts = rawPayload.split("-");
+                rawQuery = fromBase64Safe(subParts[0]);
+                epNum = parseInt(subParts[1], 10) || 1;
+            } else {
+                rawQuery = fromBase64Safe(rawPayload);
             }
-            return { "meta": rawMeta, "cacheMaxAge": 86400 };
+
+            const defaultCard = {
+                "id": id,
+                "type": mType,
+                "name": `${rawQuery}`,
+                "poster": "https://placehold.co/600x900/0a0a0c/42a5f5/png?text=" + encodeURIComponent(rawQuery.toUpperCase()) + "&font=playfair-display",
+                "background": "https://placehold.co/1920x1080/0a0a0c/1a1a24/png?text=" + encodeURIComponent(rawQuery.toUpperCase()),
+                "description": `Direct search for "${rawQuery}".`,
+                "releaseInfo": "DIRECT SEARCH"
+            };
+
+            if (mType === "anime" || mType === "series") {
+                defaultCard.videos = Array.from({ "length": 24 }, (_, i) => ({
+                    "id": `helly_raw:${mType}:${toBase64Safe(rawQuery)}-${i + 1}`,
+                    "title": `Episode ${i + 1}`,
+                    "season": 1,
+                    "episode": i + 1,
+                    "thumbnail": defaultCard.poster
+                }));
+            } else if (mType === "movie") {
+                defaultCard.videos = [{
+                    "id": id,
+                    "title": rawQuery,
+                    "released": new Date().toISOString(),
+                    "thumbnail": defaultCard.poster
+                }];
+                defaultCard.behaviorHints = { "defaultVideoId": id };
+            }
+            return { "meta": defaultCard, "cacheMaxAge": 86400 };
         }
 
-        if (!id.startsWith("anilist:")) return { "meta": null };
         const aniListId = id.split(":")[1];
-        if (!aniListId || isNaN(aniListId)) return { "meta": null };
-        
         const rawMeta = await getAnimeMeta(aniListId);
         if (!rawMeta) return { "meta": null };
         
         const meta = { ...rawMeta };
-        
         if (userConfig.useEnglishTitles && meta.englishName) {
             meta.name = meta.englishName;
         }
-        
         meta.id = id;
 
         if (meta.type === "anime" || meta.type === "series") {
             meta.type = "anime";
             const jikanEps = meta.idMal ? await fetchEpisodeDetails(meta.idMal).catch(() => ({})) : {};
             const epMeta = meta.epMeta || {};
-            const defaultThumb = meta.background || meta.poster || "https://dummyimage.com/600x337/1a1a1a/42a5f5.png?text=NEXIO+TORII+EPISODE";
+            const defaultThumb = meta.background || meta.poster || "https://dummyimage.com/600x337/1a1a1a/42a5f5.png?text=HELLY+EPISODE";
             meta.videos = Array.from({ "length": meta.episodes || 12 }, (_, i) => {
                 const epNum = i + 1;
                 const jData = jikanEps[epNum] || {};
                 const epData = epMeta[epNum] || {};
-                return { "id": `${id}-${epNum}`, "title": jData.title || epData.title || `Episode ${epNum}`, "season": 1, "episode": epNum, "thumbnail": epData.thumbnail || defaultThumb };
+                return {
+                    "id": `${id}-${epNum}`,
+                    "title": jData.title || epData.title || `Episode ${epNum}`,
+                    "season": 1,
+                    "episode": epNum,
+                    "thumbnail": epData.thumbnail || defaultThumb
+                };
             });
         } else if (meta.type === "movie") {
             meta.videos = [{
@@ -383,25 +403,21 @@ builder.defineMetaHandler(async ({ type, id, config }) => {
 });
 
 //===============
-// STREAM HANDLER (CORE ENGINE)
-// Responsible for calculating search strings, querying trackers,
-// filtering out wrong seasons/episodes, cross-checking cache status with Debrid,
-// and formatting the final JSON returned to Stremio.
+// STREAM HANDLER (HELLY ENGINE)
 //===============
 builder.defineStreamHandler(async ({ type, id, config }) => {
     try {
-        console.log(`\n[NEXIO TORII FORENSICS] ===== NEUE SUCHE =====`);
-        console.log(`[NEXIO TORII FORENSICS] ID: ${id} | Type: ${type}`);
+        console.log(`\n[HellyAddon] ===== SEARCH REQUEST =====`);
+        console.log(`[HellyAddon] ID: ${id} | Type: ${type}`);
 
-        if (!id.startsWith("anilist:") && !id.startsWith("nyaa:") && !id.startsWith("kitsu:") && !id.startsWith("tt") && !id.startsWith("nexio_raw:")) return { "streams": [] };
+        if (!id.startsWith("anilist:") && !id.startsWith("nyaa:") && !id.startsWith("kitsu:") && !id.startsWith("tt") && !id.startsWith("helly_raw:") && !id.startsWith("nexio_raw:")) {
+            return { "streams": [] };
+        }
 
         const userConfig = parseConfig(config);
         
-        //===============
-        // VALIDATION: Check if a valid playback method is available
-        //===============
         if (userConfig.debridServices.length === 0 && !userConfig.enableP2P) {
-            console.log("[PIPELINE] Stop: no debrid services configured and P2P disabled.");
+            console.log("[HellyAddon] Stop: no debrid services configured and P2P disabled.");
             return { "streams": [] };
         }
 
@@ -413,17 +429,14 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
 
         const parts = id.split(":");
 
-        // ID Unpacking to discover the requested episode and expected season.
         if (id.startsWith("kitsu:")) {
             try {
                 const kitsuId = parts[1];
                 const kRes = await axios.get(`https://kitsu.io/api/edge/anime/${kitsuId}`, { timeout: 4000 });
                 searchTitleFallback = kRes.data?.data?.attributes?.canonicalTitle || kRes.data?.data?.attributes?.titles?.en_jp;
                 requestedEp = parseInt(parts[2], 10) || 1;
-                console.log(`[NEXIO TORII FORENSICS] Kitsu Match erfolgreich: ${searchTitleFallback}`);
-            } catch (e) { }
-        } else if (id.startsWith("nexio_raw:")) {
-            const mType = parts[1];
+            } catch (e) {}
+        } else if (id.startsWith("helly_raw:") || id.startsWith("nexio_raw:")) {
             let rawPayload = parts[2];
             if (rawPayload && rawPayload.includes("-")) {
                 let subParts = rawPayload.split("-");
@@ -483,67 +496,45 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             if (r.source === "anilist") freshMeta = r.meta;
         });
 
-        // Intercepting requests coming from Cinemeta (like IMDB tt tags) and translating them to Anilist.
-        // We must accept the AniList match if ANY of its title variants matches the Cinemeta name —
-        // otherwise shows where Cinemeta has the English title but AniList exposes the Romaji
-        // (Boku no Hero Academia / Shingeki no Kyojin / Hagane no Renkinjutsushi etc.) silently
-        // fail to populate freshMeta, which in turn skips the canon-gate filter for tt-prefix IDs.
+        // Translate Cinemeta / IMDb title to AniList/Bangumi to get Chinese titles
         if (id.startsWith("tt") && searchTitleFallback) {
              try {
-                const searchResults = await searchAnime(searchTitleFallback);
-                if (searchResults && searchResults.length > 0) {
-                    const matchedId = searchResults[0].id.split(":")[1];
-                    const extraMeta = await getAnimeMeta(matchedId);
-                    if (extraMeta) {
-                        const norm = s => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
-                        const cinemetaNorm = norm(searchTitleFallback);
-                        const variants = [extraMeta.name, extraMeta.englishName, extraMeta.altName]
-                            .concat(Array.isArray(extraMeta.synonyms) ? extraMeta.synonyms : [])
-                            .map(norm)
-                            .filter(Boolean);
-                        const matched = variants.some(v => v === cinemetaNorm || v.includes(cinemetaNorm) || cinemetaNorm.includes(v));
-                        if (matched) {
-                            freshMeta = extraMeta;
-                        }
-                    }
+                const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback);
+                if (extraMeta) {
+                    freshMeta = extraMeta;
                 }
             } catch (e) {}
         } else if (!freshMeta && searchTitleFallback && !isRawSearch) {
              try {
-                const searchResults = await searchAnime(searchTitleFallback);
-                if (searchResults && searchResults.length > 0) {
-                    const matchedId = searchResults[0].id.split(":")[1];
-                    freshMeta = await getAnimeMeta(matchedId);
+                const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback);
+                if (extraMeta) {
+                    freshMeta = extraMeta;
                 }
             } catch (e) {}
         }
 
         if (!freshMeta && !searchTitleFallback) {
-            console.log(`[NEXIO TORII FORENSICS] Abbruch: Keine Metadaten oder Fallback-Titel gefunden.`);
+            console.log(`[HellyAddon] Abort: No metadata found for ${id}`);
             return { "streams": [] };
         }
 
-        // Contextual season extraction from standard title conventions.
+        // Season detection from title string if not tt
         const extractSeason = (t) => {
             const nthMatch = t.match(/\b(\d+)(?:st|nd|rd|th)\s+(?:Season|Part|Cour)\b/i);
             if (nthMatch) return parseInt(nthMatch[1], 10);
             const m = t.match(/\b(?:S|Season|Part|Cour|Dai|Di)\s*0*(\d+)\b/i);
             if (m) return parseInt(m[1], 10);
-            const wordMatch = t.match(/\b(second|third|fourth|fifth|sixth|ii|iii|iv|v|vi)\s+(season|part|cour)\b/i);
-            if (wordMatch) {
-                const val = wordMatch[1].toLowerCase();
-                if (val === "second" || val === "ii") return 2;
-                if (val === "third" || val === "iii") return 3;
-                if (val === "fourth" || val === "iv") return 4;
-                if (val === "fifth" || val === "v") return 5;
-                if (val === "sixth" || val === "vi") return 6;
+            const cnSeason = t.match(/第\s*([0-9一二三四五六七八九十]+)\s*(?:季|期)/);
+            if (cnSeason) {
+                const CH_MAP = { "一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7 };
+                return CH_MAP[cnSeason[1]] || parseInt(cnSeason[1], 10);
             }
             return null;
         };
 
         if (!id.startsWith("tt") && !isRawSearch) {
             let detected = null;
-            const sources = [searchTitleFallback, freshMeta ? freshMeta.name : "", freshMeta ? freshMeta.altName : ""];
+            const sources = [searchTitleFallback, freshMeta?.name, freshMeta?.altName, ...(freshMeta?.chineseTitles || [])];
             for (let s of sources) {
                 if (s) {
                     let d = extractSeason(s);
@@ -557,102 +548,193 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         }
 
         const isMovie = type === "movie" || (freshMeta && freshMeta.format === "MOVIE");
+        const rawChineseTitles = (freshMeta && Array.isArray(freshMeta.chineseTitles)) ? freshMeta.chineseTitles : [];
+        const expandedChineseTitles = new Set();
+        rawChineseTitles.forEach(ct => {
+            if (!ct) return;
+            expandedChineseTitles.add(ct);
 
+            // Simplified and Traditional Chinese variants
+            const simp = toSimplifiedChinese(ct);
+            const trad = toTraditionalChinese(ct);
+            if (simp) expandedChineseTitles.add(simp);
+            if (trad) expandedChineseTitles.add(trad);
+
+            // Base title without movie prefixes/suffixes
+            const strippedMovie = ct.replace(/^(?:剧场版|劇場版|电影|電影)\s*/i, "")
+                                    .replace(/\s*(?:剧场版|劇場版|电影|電影)$/i, "")
+                                    .trim();
+            if (strippedMovie && strippedMovie.length >= 2) {
+                expandedChineseTitles.add(strippedMovie);
+                expandedChineseTitles.add(toSimplifiedChinese(strippedMovie));
+                expandedChineseTitles.add(toTraditionalChinese(strippedMovie));
+            }
+
+            // Base title without season tags
+            const strippedSeason = ct.replace(/第\s*[0-9一二三四五六七八九十]+\s*(?:季|期)/g, "")
+                                     .replace(/\b(?:Season\s*\d+|S\d+)\b/ig, "")
+                                     .trim();
+            if (strippedSeason && strippedSeason.length >= 2) {
+                expandedChineseTitles.add(strippedSeason);
+                expandedChineseTitles.add(toSimplifiedChinese(strippedSeason));
+                expandedChineseTitles.add(toTraditionalChinese(strippedSeason));
+            }
+
+            // Common anime alias variants (e.g. Chainsaw Man 链锯人 <-> 电锯人)
+            if (ct.includes("链锯人")) expandedChineseTitles.add(ct.replace(/链锯人/g, "电锯人"));
+            if (ct.includes("电锯人")) expandedChineseTitles.add(ct.replace(/电锯人/g, "链锯人"));
+            if (ct.includes("鏈鋸人")) expandedChineseTitles.add(ct.replace(/鏈鋸人/g, "電鋸人"));
+            if (ct.includes("電鋸人")) expandedChineseTitles.add(ct.replace(/電鋸人/g, "鏈鋸人"));
+            if (ct.includes("蕾塞")) {
+                expandedChineseTitles.add(ct.replace(/蕾塞/g, "蕾赛"));
+                expandedChineseTitles.add(ct.replace(/蕾塞/g, "蕾潔"));
+            }
+            if (ct.includes("蕾赛")) {
+                expandedChineseTitles.add(ct.replace(/蕾赛/g, "蕾塞"));
+                expandedChineseTitles.add(ct.replace(/蕾赛/g, "蕾潔"));
+            }
+            if (ct.includes("蕾潔")) {
+                expandedChineseTitles.add(ct.replace(/蕾潔/g, "蕾塞"));
+                expandedChineseTitles.add(ct.replace(/蕾潔/g, "蕾赛"));
+            }
+        });
+
+        // Also apply alias substitutions on base stripped titles
+        Array.from(expandedChineseTitles).forEach(ct => {
+            if (ct.includes("链锯人")) expandedChineseTitles.add(ct.replace(/链锯人/g, "电锯人"));
+            if (ct.includes("电锯人")) expandedChineseTitles.add(ct.replace(/电锯人/g, "链锯人"));
+            if (ct.includes("蕾塞")) {
+                expandedChineseTitles.add(ct.replace(/蕾塞/g, "蕾赛"));
+                expandedChineseTitles.add(ct.replace(/蕾塞/g, "蕾潔"));
+            }
+        });
+
+        const chineseTitles = Array.from(expandedChineseTitles);
+        const seasonOffset = (freshMeta && Number.isFinite(freshMeta.seasonOffset)) ? freshMeta.seasonOffset : 0;
+        const absoluteEp = seasonOffset + requestedEp;
+
+        console.log(`[HellyAddon] Show: "${freshMeta?.name || searchTitleFallback}" | Chinese: [${chineseTitles.join(", ")}] | Season: ${expectedSeason} | Ep: ${requestedEp} (Abs: ${absoluteEp}) | Movie: ${isMovie}`);
+
+        // Canonical title collection for exact matching
+        const allCanonicalTitles = [
+            ...chineseTitles,
+            freshMeta?.name,
+            freshMeta?.englishName,
+            freshMeta?.nativeName,
+            freshMeta?.altName,
+            searchTitleFallback,
+            ...(Array.isArray(freshMeta?.synonyms) ? freshMeta.synonyms : [])
+        ].filter(Boolean);
+
+        // Build search queries for external trackers
         const titleList = [];
+        chineseTitles.forEach(t => titleList.push(sanitizeSearchQuery(t)));
         if (searchTitleFallback) titleList.push(sanitizeSearchQuery(searchTitleFallback));
-        if (freshMeta) {
-            if (freshMeta.name) titleList.push(sanitizeSearchQuery(freshMeta.name));
-            if (freshMeta.altName) titleList.push(sanitizeSearchQuery(freshMeta.altName));
-        }
+        if (freshMeta?.name) titleList.push(sanitizeSearchQuery(freshMeta.name));
+        if (freshMeta?.englishName) titleList.push(sanitizeSearchQuery(freshMeta.englishName));
 
         const uniqueTitles = [...new Set(titleList.filter(Boolean))];
         const searchQueries = new Set();
         
-        const baseTitles = new Set();
         uniqueTitles.forEach(t => {
             const stripped = t.replace(/\b(?:\d+(?:st|nd|rd|th)\s+(?:Season|Part|Cour)|Season\s*\d+|S\d+|Part\s*\d+|Cour\s*\d+|Episode\s*\d+|Ep\s*\d+)\b/ig, "")
                               .replace(/第\s*\d+\s*(?:季|期|기|話|话|集)/g, "")
                               .replace(/\s{2,}/g, " ").trim();
-            if (stripped.length > 4) baseTitles.add(stripped);
+            if (stripped.length > 2) searchQueries.add(stripped);
+            searchQueries.add(t);
         });
-        const validSearchTitles = Array.from(baseTitles);
 
-        const primaryTitleToSplit = searchTitleFallback || (freshMeta ? freshMeta.name : null);
-        if (primaryTitleToSplit) {
-             const words = sanitizeSearchQuery(primaryTitleToSplit).split(/\s+/);
-             const w2 = words.slice(0, 2).join(" ");
-             const w3 = words.slice(0, 3).join(" ");
-             const w4 = words.slice(0, 4).join(" ");
-             if (words.length >= 2 && w2.length > 5) searchQueries.add(w2);
-             if (words.length >= 3 && w3.length > 5) searchQueries.add(w3);
-             if (words.length >= 4 && w4.length > 5) searchQueries.add(w4);
-        }
-        
-        validSearchTitles.forEach(t => searchQueries.add(t));
         const sortedQueries = Array.from(searchQueries).sort((a, b) => b.length - a.length);
 
-        //===============
-        // CASCADE SEARCH & FAST FAIL LOGIC
-        // If an ISP block or Tracker block is detected (taking > 11s), the loop 
-        // aborts immediately to avoid triggering Stremio's hard 15-second timeout, 
-        // ensuring any results gathered up to that point are delivered.
-        //===============
+        // Fetcher cascade
         const fetchAllPossibleTorrents = async () => {
             const epStr = requestedEp < 10 ? `0${requestedEp}` : `${requestedEp}`;
             const sStr = expectedSeason < 10 ? `0${expectedSeason}` : `${expectedSeason}`;
+            const absEpStr = absoluteEp && absoluteEp !== requestedEp ? (absoluteEp < 10 ? `0${absoluteEp}` : `${absoluteEp}`) : null;
             const deduplicated = new Map();
             let isTrackerBlocked = false; 
-            
-            const runTask = async (queryFn) => {
-                const startTime = Date.now();
-                try {
-                    const res = await queryFn();
-                    if (res && res.length > 0) {
-                        res.forEach(t => deduplicated.set(t.hash.toLowerCase(), t));
+
+            const addTorrents = (arr) => {
+                if (!Array.isArray(arr)) return;
+                for (const t of arr) {
+                    if (t && t.hash) {
+                        deduplicated.set(t.hash.toLowerCase(), t);
                     }
-                } catch (e) {}
-                
-                const duration = Date.now() - startTime;
-                
-                // Fast-Fail Detection
-                if (duration > 11000 && deduplicated.size === 0) {
-                    isTrackerBlocked = true;
-                    console.log(`[NEXIO TORII FAST FAIL] Tracker-Block detektiert. Dauer: ${duration}ms. Breche Kaskade ab.`);
                 }
             };
 
-            let isFirstTitle = true;
-            for (const title of sortedQueries) {
-                // Respecting the isTrackerBlocked flag
-                if (deduplicated.size >= 30 || isTrackerBlocked) break;
+            // 1. PRIMARY SOURCE: ANIME GARDEN
+            if (userConfig.enableAnimeGarden !== false) {
+                try {
+                    const gardenResults = await searchAnimeGardenForAnime({
+                        chineseTitles,
+                        romajiTitles: [freshMeta?.name, searchTitleFallback].filter(Boolean),
+                        englishTitles: [freshMeta?.englishName].filter(Boolean),
+                        requestedEp,
+                        expectedSeason,
+                        isMovie,
+                        absoluteEp,
+                        subjectId: freshMeta?.subjectId || null
+                    });
+                    addTorrents(gardenResults);
+                    console.log(`[HellyAddon] Anime Garden returned ${gardenResults.length} items (Total deduplicated: ${deduplicated.size})`);
+                } catch (e) {
+                    console.error("[HellyAddon] Anime Garden error:", e.message);
+                }
+            }
 
-                if (isMovie) {
-                    await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title}`)));
-                } else {
-                    await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} ${epStr}`)));
-                    if (isTrackerBlocked) break; 
-                    
-                    if (deduplicated.size < 10) {
-                        await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} S${sStr}E${epStr}`)));
+            // If Anime Garden already returned sufficient results, return early for instant response
+            if (deduplicated.size >= 5) {
+                return { torrentsArr: Array.from(deduplicated.values()) };
+            }
+
+            // 2. SECONDARY SOURCE: NYAA (Fallback if Anime Garden has few results)
+            if (userConfig.enableNyaa !== false) {
+                const runTask = async (queryFn) => {
+                    const startTime = Date.now();
+                    try {
+                        const res = await queryFn();
+                        addTorrents(res);
+                    } catch (e) {}
+                    const duration = Date.now() - startTime;
+                    if (duration > 11000 && deduplicated.size === 0) {
+                        isTrackerBlocked = true;
                     }
-                    if (isTrackerBlocked) break;
-                    
-                    if (isFirstTitle) {
-                        await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} Batch`)));
+                };
+
+                let isFirstTitle = true;
+                for (const title of sortedQueries) {
+                    if (deduplicated.size >= 50 || isTrackerBlocked) break;
+
+                    if (isMovie) {
+                        await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title}`)));
+                    } else {
+                        await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} ${epStr}`)));
+                        if (isTrackerBlocked) break; 
+                        
+                        if (deduplicated.size < 15) {
+                            await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} S${sStr}E${epStr}`)));
+                        }
+                        if (isTrackerBlocked) break;
+
+                        if (absEpStr && deduplicated.size < 15) {
+                            await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} ${absEpStr}`)));
+                        }
                         if (isTrackerBlocked) break;
                         
-                        if (expectedSeason > 1) {
-                            await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} S${sStr}`)));
+                        if (isFirstTitle) {
+                            await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} Batch`)));
+                            if (isTrackerBlocked) break;
+                            
+                            if (expectedSeason > 1) {
+                                await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title} S${sStr}`)));
+                            }
                         }
                     }
-                    if (isTrackerBlocked) break;
-                    
-                    if (deduplicated.size === 0) {
-                        await runTask(() => enqueueScrape(() => searchNyaaForAnime(`${title}`)));
-                    }
+                    isFirstTitle = false;
                 }
-                isFirstTitle = false;
             }
+
             return { torrentsArr: Array.from(deduplicated.values()) };
         };
 
@@ -675,32 +757,41 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             return {
                 streams: [
                     {
-                        name: "TORII [INFO]\nCache warming",
-                        description: "First scrape is already running. Try this episode again in a few seconds.",
+                        name: "🌸 HELLY [INFO]\nCache warming",
+                        description: "First scrape is running. Try this episode again in a few seconds.",
                         url: BASE_URL + "/waiting.mp4"
                     }
                 ],
                 cacheMaxAge: 15
             };
         }
-        
+
         //===============
-        // CANONICAL-GATE FILTER (multi-axis hard gates ported from nexio-nagare).
-        // Applies BEFORE the existing resolution/title-substring filters to drop
-        // wrong-show / wrong-year / recap-movie / catastrophic-drift candidates
-        // that the legacy substring-based verifyTitleMatch wouldn't catch.
-        //
-        // Gates (any failure → drop):
-        //   - format mismatch:   TV canonical vs MOVIE/RECAP torrent
-        //   - year mismatch:     diff ≥ 5 (catches FMA 2003 vs Brotherhood 2009)
-        //   - title distance:    normalised Levenshtein > 0.4
-        //   - recap_tag:         RECAP hint when canonical is TV
-        //   - short_release:     Movie/Recap/Special hint when TV canonical has ≥5 episodes
-        //
-        // Skipped on raw searches (user explicitly bypassed metadata) and when
-        // freshMeta is unavailable (no canonical to gate against).
+        // CLEANUP FILTER: Drop OST, Manga, Artbooks, Cosplay, Music
         //===============
-        let canonGateDropCount = 0;
+        torrents = torrents.filter(t => {
+            if (!isRawSearch && /\b(?:Soundtrack|OST|MP3|CD|Manga|Light Novel|LN|Artbook|Doujinshi|同人誌|同人CG集|Pictures|Images|Novel|Cosplay|Music|单曲|专辑|广播剧)\b/i.test(t.title)) {
+                return false;
+            }
+            if (t.category && (t.category === "音乐" || t.category === "漫画" || t.category === "日剧")) {
+                return false;
+            }
+            return true;
+        });
+
+        //===============
+        // EXACT TITLE MATCHING FILTER
+        // Checks candidate title against canonical multi-lingual titles
+        //===============
+        if (!isRawSearch && allCanonicalTitles.length > 0) {
+            torrents = torrents.filter(t => {
+                return verifyExactTitleMatch(t.title, allCanonicalTitles);
+            });
+        }
+
+        //===============
+        // CANONICAL-GATE FILTER (format, year, distance)
+        //===============
         if (!isRawSearch && freshMeta && torrents.length > 0) {
             const canonical = {
                 format: freshMeta.format || (isMovie ? "MOVIE" : null),
@@ -709,124 +800,108 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 mainTitle: freshMeta.name || null,
                 englishTitle: freshMeta.englishName || null,
                 altName: freshMeta.altName || null,
-                synonyms: Array.isArray(freshMeta.synonyms) ? freshMeta.synonyms : []
+                nativeName: freshMeta.nativeName || null,
+                synonyms: [...(freshMeta.synonyms || []), ...chineseTitles]
             };
             const { kept, dropped } = await filterByCanonical({
                 canonical,
                 torrents,
                 opts: { preferDub: false, requestedEpisode: requestedEp, expectedSeason }
             });
-            canonGateDropCount = dropped.length;
-            if (process.env.DEBUG_MATCH === "1" && dropped.length > 0) {
-                for (const d of dropped.slice(0, 8)) {
-                    console.log(`[canon-gate] drop "${d.torrent.title}" → ${d.gateFailures.join(" | ")}`);
-                }
+            if (dropped && dropped.length > 0 && process.env.DEBUG_MATCH) {
+                console.log(`[HellyAddon] Canonical filter dropped ${dropped.length} torrents:`, dropped.map(d => `${d.torrent.title} -> ${d.gateFailures.join(", ")}`));
             }
             torrents = kept;
-            if (!torrents.length) return { "streams": [], "cacheMaxAge": 60 };
+            if (!torrents.length) {
+                console.log(`[HellyAddon] Warning: All torrents rejected by canonical filter for ${id} (${freshMeta.name})`);
+                return { "streams": [], "cacheMaxAge": 60 };
+            }
         }
 
         //===============
-        // EXPLICIT RESOLUTION & CLEANUP FILTER
-        // Discards OSTs, manga, irrelevant filetypes, and non-matching resolutions.
-        // Also drops oversized batches that likely represent multi-season bundles.
+        // STRICT SEASON GATE
+        // Discards torrents explicitly specifying wrong seasons
         //===============
-        let filterDropCount = 0;
-        
+        if (!isMovie && !isRawSearch) {
+            torrents = torrents.filter(t => {
+                return !isWrongSeason(t.title, expectedSeason);
+            });
+        }
+
+        //===============
+        // EPISODE & SEASON PACK COMPATIBILITY
+        //===============
+        if (!isMovie && !isRawSearch) {
+            torrents = torrents.filter(t => {
+                const isBatch = isSeasonBatch(t.title, expectedSeason);
+                return isBatch || isEpisodeMatch(t.title, requestedEp, expectedSeason, absoluteEp);
+            });
+        }
+
+        //===============
+        // RESOLUTION FILTER
+        //===============
         const allowedResolutions = Array.isArray(userConfig.resolutions) && userConfig.resolutions.length > 0 
             ? userConfig.resolutions 
             : ["8K", "4K", "2K", "1080p", "720p", "480p", "SD"];
 
         torrents = torrents.filter(t => {
-            if (!isRawSearch && /\b(?:Soundtrack|OST|MP3|CD|Manga|Light Novel|LN|Artbook|Doujinshi|同人誌|同人CG集|Pictures|Images|Novel|Cosplay)\b/i.test(t.title)) {
-                filterDropCount++; return false;
-            }
-            
             const { res } = extractTags(t.title);
-            if (!allowedResolutions.includes(res)) {
-                filterDropCount++; return false;
-            }
-
-            if (isRawSearch) return true;
-            
-            const isValid = verifyTitleMatch(t.title, validSearchTitles);
-            if (!isValid) { filterDropCount++; return false; }
-
-            const bytes = parseSizeToBytes(t.size);
-            const isBatch = isSeasonBatch(t.title, expectedSeason);
-            
-            if (!isMovie && !isBatch && bytes > 20.0 * 1024 * 1024 * 1024) {
-                filterDropCount++; return false;
-            }
-
-            return true;
+            return allowedResolutions.includes(res);
         });
+
+        //===============
+        // STRICT CHINESE FILTER (If enabled by user)
+        //===============
+        if (userConfig.strictChinese) {
+            torrents = torrents.filter(t => {
+                const sub = detectChineseSubtitle(t.title, t.fansub);
+                return sub.hasChinese === true;
+            });
+        }
 
         if (!torrents.length) return { "streams": [], "cacheMaxAge": 60 };
 
-        let epDropCount = 0;
-        torrents = torrents.filter(t => {
-            if (isMovie || isRawSearch) return true;
-            const isBatch = isSeasonBatch(t.title, expectedSeason);
-            const isValidMatch = isBatch || isEpisodeMatch(t.title, requestedEp, expectedSeason);
-            if (!isValidMatch) epDropCount++;
-            return isValidMatch;
-        });
-
-        if (!torrents.length) return { "streams": [], "cacheMaxAge": 60 };
-
-        const beforeSizeDedupe = torrents.length;
         torrents = dedupeTorrentsByExactSize(torrents);
-        const sizeDedupDropCount = beforeSizeDedupe - torrents.length;
 
+        // Check availability with TorBox, PikPak, etc.
         const hashes = torrents.map(t => t.hash.toLowerCase());
         const availabilityByEntry = await Promise.all(
             userConfig.debridServices.map(entry =>
                 checkStoreTorzWithCache(hashes, entry, {
                     scope: { season: expectedSeason, episode: requestedEp }
                 }).catch(error => {
-                    console.error(`[PIPELINE] ${entry.service} availability failed: ${error.message}`);
+                    console.error(`[HellyAddon] ${entry.service} availability check error: ${error.message}`);
                     return {};
                 })
             )
         );
-        const nexioPayload = encodeConfigPayload(userConfig);
+        const hellyPayload = encodeConfigPayload(userConfig);
 
-        const flags = { "GER": "🇩🇪", "ITA": "🇮🇹", "FRE": "🇫🇷", "SPA": "🇪🇸", "LAT": "💃🏻", "RUS": "🇷🇺", "POR": "🇵🇹", "ARA": "🇸🇦", "CHI": "🇨🇳", "KOR": "🇰🇷", "HIN": "🇮🇳", "POL": "🇵🇱", "NLD": "🇳🇱", "TUR": "🇹🇷", "VIE": "🇻🇳", "IND": "🇮🇩", "JPN": "🇯🇵", "ENG": "🇬🇧", "MULTI": "🌍" };
-        const userLangs = Array.isArray(userConfig.language) ? userConfig.language : [userConfig.language || "ENG"];
+        const flags = {
+            "CHI_SIMP": "🇨🇳",
+            "CHI_TRAD": "🇭🇰",
+            "CHI_DUAL": "🌍",
+            "CHI": "🇨🇳",
+            "GER": "🇩🇪", "ITA": "🇮🇹", "FRE": "🇫🇷", "SPA": "🇪🇸",
+            "LAT": "💃🏻", "RUS": "🇷🇺", "POR": "🇵🇹", "ARA": "🇸🇦",
+            "KOR": "🇰🇷", "HIN": "🇮🇳", "POL": "🇵🇱", "NLD": "🇳🇱",
+            "TUR": "🇹🇷", "VIE": "🇻🇳", "IND": "🇮🇩", "JPN": "🇯🇵",
+            "ENG": "🇬🇧", "MULTI": "🌍"
+        };
+        const userLangs = Array.isArray(userConfig.language) ? userConfig.language : [userConfig.language || "CHI_SIMP"];
 
         const streams = [];
 
-        // Iterates through valid torrents to format final stream objects
-        torrents.forEach(t => {
-            const { res } = extractTags(t.title);
-            const bytes = parseSizeToBytes(t.size);
-            const streamLang = extractLanguage(t.title, userLangs);
-            const flag = flags[streamLang] || "🇬🇧";
-            const seeders = parseInt(t.seeders, 10) || 0;
-            
-            let isValidMatch = false;
-            let isBatch = false;
+        // Build P2P streams if enabled
+        if (userConfig.enableP2P) {
+            torrents.forEach(t => {
+                const { res } = extractTags(t.title);
+                const bytes = parseSizeToBytes(t.size);
+                const streamLang = extractLanguage(t.title, userLangs);
+                const seeders = parseInt(t.seeders, 10) || 0;
+                const isBatch = isSeasonBatch(t.title, expectedSeason);
 
-            if (isMovie || isRawSearch) {
-                isValidMatch = true;
-            } else {
-                 isBatch = isSeasonBatch(t.title, expectedSeason);
-                 isValidMatch = isBatch || isEpisodeMatch(t.title, requestedEp, expectedSeason);
-            }
-
-            if (!isValidMatch) {
-                epDropCount++;
-                return; 
-            }
-
-            const batchStr = isBatch ? " | 📦 Batch" : "";
-
-            //===============
-            // P2P STREAM GENERATION
-            // Attaches active trackers enabling direct torrent streaming via Stremio.
-            //===============
-            if (userConfig.enableP2P) {
                 const parsedForP2P = buildParsedFromTitle(t.title, res, streamLang, isBatch, null);
                 const p2pStream = buildP2PStream({
                     torrent: t,
@@ -842,9 +917,8 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                     isMovie
                 });
                 streams.push(p2pStream);
-            }
-
-        });
+            });
+        }
 
         const canonicalForFormatter = freshMeta ? {
             ...freshMeta,
@@ -855,10 +929,11 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             torrents,
             availabilityByEntry,
             userConfig,
-            nexioPayload,
+            nexioPayload: hellyPayload,
             baseUrl: BASE_URL,
             requestedEp,
             expectedSeason,
+            absoluteEp,
             isMovie,
             isRawSearch,
             flags,
@@ -872,13 +947,11 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         });
         streams.push(...debridStreams);
 
-        console.log(`[NEXIO TORII FORENSICS] Canon-Gate ${canonGateDropCount}, Resolution-Filter ${filterDropCount}, Size-Dedup ${sizeDedupDropCount}, Episoden-Filter ${epDropCount} nicht-passende Einträge gelöscht.`);
-        console.log(`[NEXIO TORII FORENSICS] Finale Streams an Stremio gesendet: ${streams.length}\n`);
+        console.log(`[HellyAddon] Final streams built: ${streams.length}\n`);
 
         //===============
-        // 3-PHASE SORTER (SCORING)
-        // Re-orders the final stream list logically based on:
-        // Language Priority -> Resolution Preference -> Batch Quality -> Seeders/Size
+        // 4-PHASE HIGH PRECISION SORTER
+        // Cached -> Chinese Subtitles -> Language Preference -> Resolution -> Seeders/Size
         //===============
         return { 
             "streams": streams.sort((a, b) => {
@@ -886,15 +959,26 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 if (b._prog > 0 && a._prog === 0) return 1;
                 if (a._isCached !== b._isCached) return b._isCached ? 1 : -1;
 
+                // Priority for Chinese subtitles
+                const isChnA = typeof a._lang === "string" && a._lang.startsWith("CHI");
+                const isChnB = typeof b._lang === "string" && b._lang.startsWith("CHI");
+                if (userConfig.preferChinese && isChnA !== isChnB) {
+                    return isChnA ? -1 : 1;
+                }
+
+                // Language Matrix Score
                 const getLangScore = (l) => {
-                    if (userLangs.includes(l)) return 200 - userLangs.indexOf(l);
+                    if (userLangs.includes(l)) return 300 - (userLangs.indexOf(l) * 10);
+                    if (l === "CHI_DUAL" || l === "CHI_SIMP" || l === "CHI_TRAD" || l === "CHI") return 250;
                     if (l === "MULTI") return 150;
+                    if (l === "ENG") return 100;
                     return 0;
                 };
                 const langScoreA = getLangScore(a._lang);
                 const langScoreB = getLangScore(b._lang);
                 if (langScoreA !== langScoreB) return langScoreB - langScoreA;
 
+                // Resolution Score
                 const resMap = { "8K": 8, "4K": 4, "2K": 2, "1080p": 1, "720p": 0.5, "480p": 0.25, "SD": 0 };
                 const resScoreA = resMap[a._res] || 0;
                 const resScoreB = resMap[b._res] || 0;
@@ -912,7 +996,10 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             }), 
             "cacheMaxAge": 3600 
         };
-    } catch (err) { return { "streams": [] }; }
+    } catch (err) {
+        console.error("[HellyAddon] Stream handler error:", err);
+        return { "streams": [] };
+    }
 });
 
 module.exports = { "addonInterface": builder.getInterface(), configuredManifest, manifest, parseConfig };

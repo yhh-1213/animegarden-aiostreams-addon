@@ -65,3 +65,33 @@ test("filterByCanonical handles empty torrent list gracefully", async () => {
     assert.deepEqual(kept, []);
     assert.deepEqual(dropped, []);
 });
+
+test("filterByCanonical keeps Chinese anime movie releases without title-distance drops", async () => {
+    const canonicalMovie = {
+        format: "MOVIE",
+        year: 2025,
+        episodeCount: 1,
+        mainTitle: "Chainsaw Man: Reze-hen",
+        englishTitle: "Chainsaw Man – The Movie: Reze Arc",
+        altName: "Chainsaw Man – The Movie: Reze Arc",
+        nativeName: "チェンソーマン レゼ篇",
+        synonyms: [
+            "剧场版 链锯人 蕾塞篇",
+            "链锯人 蕾塞篇",
+            "剧场版 电锯人 蕾塞篇",
+            "电锯人 蕾塞篇",
+            "電鋸人 蕾賽篇",
+            "鏈鋸人 蕾潔篇"
+        ]
+    };
+    const torrents = [
+        { title: "[NEST] 剧场版 链锯人 蕾塞篇 / 剧场版 チェンソーマン レゼ篇 [MA WEB-DL 2160p HEVC DDP5.1 Atmos][简繁日内封]", hash: "nest2160" },
+        { title: "[NEST] 剧场版 链锯人 蕾塞篇 / 剧场版 チェンソーマン レゼ篇 [MA WEB-DL 1080p AVC DDP5.1 Atmos][简繁日内封]", hash: "nest1080" },
+        { title: "【豌豆字幕组&风之圣殿字幕组】★剧场版[电锯人 / 链锯人 蕾塞篇][简体][1080P][MP4]", hash: "wandou" },
+        { title: "【幻樱字幕组】【剧场版】【电锯人剧场版蕾赛篇 Chainsaw Man The Movie Reze Arc】【GB_MP4】【1920X1080】", hash: "huanying" }
+    ];
+    const { kept, dropped } = await filterByCanonical({ canonical: canonicalMovie, torrents });
+    assert.equal(dropped.length, 0, `unexpectedly dropped torrents: ${JSON.stringify(dropped.map(d => ({ title: d.torrent.title, gates: d.gateFailures })))}`);
+    assert.equal(kept.length, 4);
+    assert.ok(kept.every(t => t._matchScore >= 100));
+});

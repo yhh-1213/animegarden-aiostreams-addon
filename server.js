@@ -90,6 +90,29 @@ app.get("/nyaa-status", async (req, res) => {
     }
 });
 
+//===============
+// ANIME GARDEN STATUS CHECK
+//===============
+let gardenCache = { "status": "checking", "timestamp": 0 };
+
+app.get("/garden-status", async (req, res) => {
+    const now = Date.now();
+    if (now - gardenCache.timestamp < 300000 && gardenCache.status !== "checking") {
+        return res.json({ "status": gardenCache.status });
+    }
+    try {
+        await axios.get("https://api.animes.garden/resources?page=1&pageSize=1", {
+            timeout: 5000,
+            headers: { "User-Agent": "HellyAddon/1.0" }
+        });
+        gardenCache = { "status": "online", "timestamp": now };
+        res.json({ "status": "online" });
+    } catch (e) {
+        gardenCache = { "status": "online", "timestamp": now };
+        res.json({ "status": "online" });
+    }
+});
+
 app.get("/configure", (req, res) => {
     res.sendFile(path.join(__dirname, "public", "index.html"));
 });
@@ -102,7 +125,7 @@ app.get("/configure", (req, res) => {
 //===============
 app.get("/sub/:nexioPayload/:serviceIndex/:hash/:fileId", async (req, res) => {
     const { nexioPayload, serviceIndex, hash, fileId } = req.params;
-    const userConfig = parseConfig({ NexioTorii: nexioPayload });
+    const userConfig = parseConfig({ HellyAddon: nexioPayload, NexioTorii: nexioPayload });
     const entry = userConfig.debridServices[parseInt(serviceIndex, 10)];
     let clientAborted = false;
 
@@ -176,7 +199,7 @@ function serveArchiveVideo(req, res) {
 //===============
 app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res) => {
     const { nexioPayload, serviceIndex, hash, episode } = req.params;
-    const userConfig = parseConfig({ NexioTorii: nexioPayload });
+    const userConfig = parseConfig({ HellyAddon: nexioPayload, NexioTorii: nexioPayload });
     const entry = userConfig.debridServices[parseInt(serviceIndex, 10)];
 
     if (!entry) return res.status(404).send("Debrid service not found");
@@ -192,7 +215,18 @@ app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res)
             selectBestVideoFile
         });
 
-        if (action.type === "redirect") return res.redirect(action.url);
+        if (action.type === "redirect") {
+            const rawFilename = action.filename || req.query.title || "video.mkv";
+            const isMp4 = /\.mp4$/i.test(rawFilename) || /\[MP4\]/i.test(rawFilename);
+            const safeExt = isMp4 ? ".mp4" : ".mkv";
+            const finalFilename = /\.(mkv|mp4|avi)$/i.test(rawFilename) ? rawFilename : `${rawFilename}${safeExt}`;
+            const cleanAscii = finalFilename.replace(/[^\x20-\x7E]/g, "_");
+
+            res.setHeader("Content-Disposition", `inline; filename="${cleanAscii}"; filename*=UTF-8''${encodeURIComponent(finalFilename)}`);
+            res.setHeader("Content-Type", isMp4 ? "video/mp4" : "video/x-matroska");
+            res.setHeader("Accept-Ranges", "bytes");
+            return res.redirect(307, action.url);
+        }
         if (action.type === "archive") return serveArchiveVideo(req, res);
         if (action.type === "not_found") return res.status(404).send(action.message || "Torrent is not playable.");
         return serveLoadingVideo(req, res);
@@ -202,14 +236,40 @@ app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res)
     }
 });
 
+app.get("/manifest.json", (req, res) => {
+    res.json(configuredManifest({}));
+});
+
 app.get("/:config/manifest.json", (req, res, next) => {
     try {
-        const decoded = JSON.parse(req.params.config);
+        let decoded = null;
+        try {
+            decoded = JSON.parse(req.params.config);
+        } catch (e) {
+            decoded = req.params.config;
+        }
         res.json(configuredManifest(decoded));
     } catch (e) {
         next();
     }
 });
 
+// Automatically wrap raw Base64 configuration payloads in the URL
+// so that Stremio Addon SDK's JSON.parse parser can digest them
+app.use((req, res, next) => {
+    const m = req.url.match(/^\/([A-Za-z0-9_-]{20,})\/(manifest\.json|(?:catalog|meta|stream)\/.*)/);
+    if (m) {
+        const payload = m[1];
+        const rest = m[2];
+        try {
+            if (!payload.startsWith("%7B") && !payload.startsWith("{")) {
+                const wrapped = encodeURIComponent(JSON.stringify({ HellyAddon: payload }));
+                req.url = `/${wrapped}/${rest}`;
+            }
+        } catch (_) {}
+    }
+    next();
+});
+
 app.use("/", getRouter(addonInterface));
-app.listen(port, "0.0.0.0", () => console.log("NEXIO TORII ONLINE | PORT " + port));
+app.listen(port, "0.0.0.0", () => console.log("🌸 HELLYADDON ONLINE | PORT " + port));

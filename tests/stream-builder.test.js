@@ -68,7 +68,7 @@ test("buildDebridStreams emits cached and uncached streams for multiple services
     assert.equal(streams.length, 2);
     assert.match(streams[0].name, /^1080p/);
     assert.match(streams[0].name, /⚡ RD/);
-    assert.match(streams[0].name, /⛩ Torii/);
+    assert.match(streams[0].name, /🌸 HellyAddon/);
     assert.equal(streams[0].url, "https://nexio-torii.example/resolve/" + input.nexioPayload + "/0/ABCDEF/1?title=%5BGroup%5D%20Example%20Show%20-%2001%20%5B1080p%5D%5BAAC%5D.mkv");
     assert.equal(streams[0].subtitles.length, 1);
     assert.match(streams[0].description, /📄 Example Show - 01 \[1080p\]\.mkv/);
@@ -131,7 +131,7 @@ test("buildP2PStream emits a Stremio-shape P2P stream with infoHash + sources", 
     assert.equal(stream.url, undefined);
     assert.ok(Array.isArray(stream.sources));
     assert.match(stream.name, /📡 P2P/);
-    assert.match(stream.name, /⛩ Torii/);
+    assert.match(stream.name, /🌸 HellyAddon/);
 });
 
 test("dedupeTorrentsByExactSize keeps the highest-seeded torrent for identical sizes", () => {

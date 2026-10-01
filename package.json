@@ -1,7 +1,7 @@
 {
-  "name": "nexio-torii",
-  "version": "8.2.0",
-  "description": "Nexio Torii Stremio anime streams addon",
+  "name": "hellyaddon",
+  "version": "1.0.0",
+  "description": "HellyAddon - High-precision Stremio scraper for Anime Garden & Nyaa with Chinese subtitles, PikPak & TorBox support",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

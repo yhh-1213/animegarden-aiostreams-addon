@@ -40,7 +40,7 @@ test("formatToriiStream emits Nexio-friendly name + description for cached debri
     assert.match(nameLines[1], /🎙 JPN\+ENG/);
     assert.match(nameLines[1], /5\.1/);
     assert.match(nameLines[1], /📝 ENG/);
-    assert.equal(nameLines[2], "⛩ Torii");
+    assert.equal(nameLines[2], "🌸 HellyAddon");
 
     const desc = out.description;
     assert.match(desc, /📄 .*One Piece.*1100/);
