@@ -469,6 +469,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
 
         let cinemetaYear = null;
         let cinemetaType = null;
+        let cinemetaVideos = [];
         const metaTasks = [];
         if (id.startsWith("tt")) {
             metaTasks.push((async () => {
@@ -476,11 +477,13 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 let name = "";
                 let metaYear = null;
                 let metaType = null;
+                let videos = [];
                 try {
                     let res = await axios.get(`https://v3-cinemeta.strem.io/meta/${type}/${imdbId}.json`, { timeout: 4000 });
                     name = res.data?.meta?.name;
                     metaYear = res.data?.meta?.year ? parseInt(res.data.meta.year, 10) : null;
                     metaType = res.data?.meta?.type;
+                    if (Array.isArray(res.data?.meta?.videos)) videos = res.data.meta.videos;
                 } catch(e) {}
                 if (!name) {
                     const otherType = type === "movie" ? "series" : "movie";
@@ -489,9 +492,10 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                         name = res2.data?.meta?.name;
                         metaYear = res2.data?.meta?.year ? parseInt(res2.data.meta.year, 10) : null;
                         metaType = res2.data?.meta?.type;
+                        if (Array.isArray(res2.data?.meta?.videos)) videos = res2.data.meta.videos;
                     } catch(e) {}
                 }
-                return { source: "cinemeta", name: name || "", year: metaYear, type: metaType || type };
+                return { source: "cinemeta", name: name || "", year: metaYear, type: metaType || type, videos };
             })());
         }
         if (aniListId) {
@@ -506,6 +510,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 searchTitleFallback = r.name;
                 cinemetaYear = r.year;
                 cinemetaType = r.type;
+                if (Array.isArray(r.videos)) cinemetaVideos = r.videos;
             }
             if (r.source === "anilist") freshMeta = r.meta;
         });
@@ -659,7 +664,32 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
 
         const chineseTitles = Array.from(expandedChineseTitles);
         const seasonOffset = (freshMeta && Number.isFinite(freshMeta.seasonOffset)) ? freshMeta.seasonOffset : 0;
-        const absoluteEp = seasonOffset + requestedEp;
+
+        // Calculate cumulative episode from Cinemeta video list
+        let cinemetaCumulativeEp = null;
+        let cinemetaEpisodeTitle = null;
+        if (id.startsWith("tt") && cinemetaVideos.length > 0 && expectedSeason && requestedEp) {
+            const regularVideos = cinemetaVideos.filter(v => v.season > 0).sort((a, b) => {
+                if (a.season !== b.season) return a.season - b.season;
+                return (a.episode || a.number || 0) - (b.episode || b.number || 0);
+            });
+            const targetIdx = regularVideos.findIndex(v => v.season === expectedSeason && (v.episode === requestedEp || v.number === requestedEp));
+            if (targetIdx !== -1) {
+                cinemetaCumulativeEp = targetIdx + 1;
+                cinemetaEpisodeTitle = regularVideos[targetIdx].name || null;
+            }
+        }
+
+        if (freshMeta && cinemetaEpisodeTitle) {
+            freshMeta.currentEpTitle = cinemetaEpisodeTitle;
+        }
+
+        let absoluteEp = requestedEp;
+        if (seasonOffset > 0) {
+            absoluteEp = seasonOffset + requestedEp;
+        } else if (cinemetaCumulativeEp) {
+            absoluteEp = cinemetaCumulativeEp;
+        }
 
         const episodeLog = isMovie 
             ? "Movie: true" 

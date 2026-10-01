@@ -406,3 +406,19 @@ test("resolveAnimeMetaFromTitle prefers TV Season 2 over ONA mini-anime", async 
     assert.equal(meta.seasonOffset, 28);
     assert.ok(meta.chineseTitles.some(t => t.includes("第二季")));
 });
+
+test("Parser recognizes full series batch like 全720集 and broadcast year ranges [2002-2017]", () => {
+    const title = "【BYYM】[火影忍者_火影忍者疾风传 Naruto_Naruto Shippuuden][2002-2017][全720集 1080p 简体][MP4](内详info文件)";
+    assert.equal(isSeasonBatch(title, 5, 1, 89), true);
+    assert.equal(isSeasonBatch(title, 1, 1, 1), true);
+    assert.equal(isEpisodeMatch(title, 1, 5, 89), true);
+});
+
+test("isEpisodeMatch strictly rejects un-seasoned S1 releases when expectedSeason > 1", () => {
+    const s1Release = "[桜都字幕组] 火影忍者 [01][1080p]";
+    // Requesting S5E1 (relative ep 1) must be rejected because s1Release does not have Season 5
+    assert.equal(isEpisodeMatch(s1Release, 1, 5, 89), false);
+    // Requesting S1E1 must be accepted
+    assert.equal(isEpisodeMatch(s1Release, 1, 1, 1), true);
+});
+
