@@ -396,3 +396,13 @@ test("resolveAnimeMetaFromTitle accurately resolves movie title with subtitle to
     assert.ok(Array.isArray(meta.chineseTitles));
     assert.ok(meta.chineseTitles.some(t => t.includes("THE LAST ATTACK")));
 });
+
+test("resolveAnimeMetaFromTitle prefers TV Season 2 over ONA mini-anime", async () => {
+    const meta = await resolveAnimeMetaFromTitle("Frieren: Beyond Journey's End", { expectedSeason: 2 });
+
+    assert.ok(meta);
+    assert.equal(meta.id, "anilist:182255");
+    assert.match(meta.name, /2nd Season/i);
+    assert.equal(meta.seasonOffset, 28);
+    assert.ok(meta.chineseTitles.some(t => t.includes("第二季")));
+});

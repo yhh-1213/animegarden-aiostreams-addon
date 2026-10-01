@@ -518,7 +518,8 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback, {
                     isMovie,
                     year: cinemetaYear,
-                    type: isMovie ? "movie" : type
+                    type: isMovie ? "movie" : type,
+                    expectedSeason
                 });
                 if (extraMeta) {
                     freshMeta = extraMeta;
@@ -529,7 +530,8 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                 const extraMeta = await resolveAnimeMetaFromTitle(searchTitleFallback, {
                     isMovie,
                     year: cinemetaYear,
-                    type: isMovie ? "movie" : type
+                    type: isMovie ? "movie" : type,
+                    expectedSeason
                 });
                 if (extraMeta) {
                     freshMeta = extraMeta;
