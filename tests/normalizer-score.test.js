@@ -95,3 +95,34 @@ test("ACCEPTS FMA Brotherhood proper release (year exact match)", () => {
     assert.equal(result.gateFailures.length, 0);
     assert.ok(result.score >= 100);
 });
+
+test("REJECTS Season 1 candidate when expectedSeason is 3 (season gate)", () => {
+    const result = scoreCandidate({
+        canonical: CANONICAL.aot,
+        candidate: {
+            rawTitle: "[Group] Shingeki no Kyojin [01-12END][1080p]",
+            parsedTitle: "Shingeki no Kyojin",
+            year: 2013,
+            episodes: [1],
+            seasons: [1]
+        },
+        opts: { expectedSeason: 3, requestedEpisode: 2, absoluteEpisode: 26 }
+    });
+    assert.ok(result.gateFailures.length > 0);
+    assert.ok(result.gateFailures.some(r => r.startsWith("season")), `expected season gate failure, got ${JSON.stringify(result.gateFailures)}`);
+});
+
+test("ACCEPTS Season 3 candidate when expectedSeason is 3", () => {
+    const result = scoreCandidate({
+        canonical: { ...CANONICAL.aot, year: 2018 },
+        candidate: {
+            rawTitle: "[Group] Shingeki no Kyojin Season 3 [01-12END][1080p]",
+            parsedTitle: "Shingeki no Kyojin Season 3",
+            year: 2018,
+            episodes: [2],
+            seasons: [3]
+        },
+        opts: { expectedSeason: 3, requestedEpisode: 2, absoluteEpisode: 26 }
+    });
+    assert.equal(result.gateFailures.length, 0, `unexpected gate failures: ${JSON.stringify(result.gateFailures)}`);
+});

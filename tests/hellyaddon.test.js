@@ -8,6 +8,7 @@ const {
 
 const {
     extractSeasonNumber,
+    extractSeasonRange,
     isWrongSeason,
     extractEpisodes,
     getBatchRange,
@@ -421,4 +422,80 @@ test("isEpisodeMatch strictly rejects un-seasoned S1 releases when expectedSeaso
     // Requesting S1E1 must be accepted
     assert.equal(isEpisodeMatch(s1Release, 1, 1, 1), true);
 });
+
+test("isSeasonBatch and isEpisodeMatch strictly reject unlabelled S1 batches when expectedSeason > 1 (Rent-a-Girlfriend S3)", () => {
+    const s1Batch = "[桜都字幕组][租借女友/Kanojo Okarishimasu][01-12END][HEVC-10Bit-2160P AAC][外挂GB/BIG5][WEB-Rip][MKV+ass][V2]";
+
+    // S3 Ep 2 (absEp: 26) must NOT match S1 [01-12END]
+    assert.equal(isSeasonBatch(s1Batch, 3, 2, 26), false);
+    assert.equal(isEpisodeMatch(s1Batch, 2, 3, 26), false);
+
+    // S3 Ep 3 (absEp: 27) must NOT match S1 [01-12END]
+    assert.equal(isSeasonBatch(s1Batch, 3, 3, 27), false);
+    assert.equal(isEpisodeMatch(s1Batch, 3, 3, 27), false);
+
+    // S1 Ep 2 must match S1 [01-12END]
+    assert.equal(isSeasonBatch(s1Batch, 1, 2, 2), true);
+    assert.equal(isEpisodeMatch(s1Batch, 2, 1, 2), true);
+});
+
+test("isSeasonBatch accepts explicit Season 3 batches and multi-season boxsets covering absolute episode", () => {
+    const s3Batch1 = "[DBD-Raws][租借女友 第三季/Kanojo, Okarishimasu S3/彼女、お借りします 3期][01-12TV全集][1080P][BDRip][HEVC-10bit][简繁外挂][FLACx2][MKV]";
+    const s3Batch2 = "[桜都字幕组] 租借女友 第三季 [01-12END][1080p]";
+    const completeBox = "[租借女友/Kanojo, Okarishimasu][01-36END]";
+
+    assert.equal(isSeasonBatch(s3Batch1, 3, 2, 26), true);
+    assert.equal(isEpisodeMatch(s3Batch1, 2, 3, 26), true);
+
+    assert.equal(isSeasonBatch(s3Batch2, 3, 2, 26), true);
+    assert.equal(isEpisodeMatch(s3Batch2, 2, 3, 26), true);
+
+    // Multi-season complete box covers absolute ep 26
+    assert.equal(isSeasonBatch(completeBox, 3, 2, 26), true);
+    assert.equal(isEpisodeMatch(completeBox, 2, 3, 26), true);
+});
+
+test("extractSeasonRange detects various season range notations", () => {
+    assert.deepEqual(extractSeasonRange("Kanojo Okarishimasu S1-S3 [1080p]"), { start: 1, end: 3 });
+    assert.deepEqual(extractSeasonRange("Kanojo Okarishimasu S01-S03"), { start: 1, end: 3 });
+    assert.deepEqual(extractSeasonRange("Kanojo Okarishimasu Season 1-3"), { start: 1, end: 3 });
+    assert.deepEqual(extractSeasonRange("[DBD-Raws][租借女友/1-3期]"), { start: 1, end: 3 });
+    assert.deepEqual(extractSeasonRange("租借女友 第一季~第三季 全集"), { start: 1, end: 3 });
+    assert.equal(extractSeasonRange("租借女友 [01-12END]"), null);
+});
+
+test("selectBestVideoFile enforces season isolation across multi-season folder structures", () => {
+    const multiSeasonFiles = [
+        { id: "s1e2", name: "Season 1/[Sakurato.Sub] Kanojo, Okarishimasu - 02.mkv", size: 500 * 1024 * 1024 },
+        { id: "s2e2", name: "Season 2/[Sakurato.Sub] Kanojo, Okarishimasu - 02.mkv", size: 600 * 1024 * 1024 },
+        { id: "s3e2", name: "Season 3/[Sakurato.Sub] Kanojo, Okarishimasu - 02.mkv", size: 700 * 1024 * 1024 }
+    ];
+
+    // Requesting Season 3 Ep 2 must pick Season 3
+    const s3 = selectBestVideoFile(multiSeasonFiles, 2, 3, false, 26);
+    assert.ok(s3);
+    assert.equal(s3.id, "s3e2");
+
+    // Requesting Season 1 Ep 2 must pick Season 1
+    const s1 = selectBestVideoFile(multiSeasonFiles, 2, 1, false, 2);
+    assert.ok(s1);
+    assert.equal(s1.id, "s1e2");
+
+    // Requesting Season 2 Ep 2 must pick Season 2
+    const s2 = selectBestVideoFile(multiSeasonFiles, 2, 2, false, 14);
+    assert.ok(s2);
+    assert.equal(s2.id, "s2e2");
+});
+
+test("selectBestVideoFile rejects unlabelled Season 1 torrent file when requesting Season 3", () => {
+    const s1Files = [
+        { id: "f2", name: "[Sakurato.Sub][Kanojo,Okarishimasu][01-12]/mkv/[Sakurato.Sub] Kanojo, Okarishimasu - 02 (HEVC-10Bit-2160P AAC).mkv", size: 1000 }
+    ];
+    const s1TorrentTitle = "[桜都字幕组][租借女友/Kanojo Okarishimasu][01-12END][HEVC-10Bit-2160P AAC][外挂GB/BIG5][WEB-Rip][MKV+ass][V2]";
+
+    // For Season 3, this unlabelled S1 file must be rejected (returns null)
+    const result = selectBestVideoFile(s1Files, 2, 3, false, 26, s1TorrentTitle);
+    assert.equal(result, null);
+});
+
 
