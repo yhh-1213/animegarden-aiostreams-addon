@@ -236,24 +236,22 @@ app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res)
             const finalFilename = /\.(mkv|mp4|avi)$/i.test(rawFilename) ? rawFilename : `${rawFilename}${safeExt}`;
             const cleanAscii = finalFilename.replace(/[^\x20-\x7E]/g, "_");
 
-            console.log(`[Resolve] [${entry.service}] 🚀 307 Redirecting to stream: "${cleanAscii}"`);
+            console.log(`[Resolve] [${entry.service}] 🚀 302 Redirecting to stream: "${cleanAscii}"`);
             console.log(`[Resolve] [${entry.service}] Stream URL: ${action.url.slice(0, 100)}...`);
 
-            res.setHeader("Content-Disposition", `inline; filename="${cleanAscii}"; filename*=UTF-8''${encodeURIComponent(finalFilename)}`);
-            res.setHeader("Content-Type", isMp4 ? "video/mp4" : "video/x-matroska");
-            res.setHeader("Accept-Ranges", "bytes");
-            return res.redirect(307, action.url);
+            res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+            return res.redirect(302, action.url);
         }
         if (action.type === "archive") {
-            console.warn(`[Resolve] [${entry.service}] 📦 Torrent file not matched or archive pack not ready. Redirecting to archive.mp4`);
-            return serveArchiveVideo(req, res);
+            console.warn(`[Resolve] [${entry.service}] 📦 Torrent file not matched or archive pack not ready.`);
+            return res.status(404).send("Torrent file not matched or archive pack not ready.");
         }
         if (action.type === "not_found") {
             console.error(`[Resolve] [${entry.service}] ❌ Torrent not playable: ${action.message || "Not playable"}`);
             return res.status(404).send(action.message || "Torrent is not playable.");
         }
-        console.warn(`[Resolve] [${entry.service}] ⏳ Stream downloading or pending. Redirecting to waiting.mp4`);
-        return serveLoadingVideo(req, res);
+        console.warn(`[Resolve] [${entry.service}] ⏳ Stream downloading or pending in cloud.`);
+        return res.status(503).send("Torrent is downloading to debrid cloud. Please check back in a few minutes.");
     } catch (e) {
         const status = e.response ? e.response.status : null;
         const errData = e.response?.data?.error || e.response?.data || null;

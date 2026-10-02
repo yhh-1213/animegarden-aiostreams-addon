@@ -223,3 +223,135 @@ test("checkStoreTorz routes torbox service directly to TorBox native client", as
 
     assert.equal(result["1234567890123456789012345678901234567890"].isCached, true);
 });
+
+test("addTorBoxTorrent queries mylist?id when existing torrent in mylist has empty files", async () => {
+    const queriedIds = [];
+    const http = {
+        get: async (url) => {
+            if (url.includes("/v1/api/torrents/mylist?bypass_cache=true")) {
+                return {
+                    data: {
+                        success: true,
+                        data: [
+                            {
+                                id: 777,
+                                hash: "08a80a2b0d00925da44f007b4f12e6f34184f1ad",
+                                download_state: "cached",
+                                files: [] // Empty in list view
+                            }
+                        ]
+                    }
+                };
+            }
+            if (url.includes("id=777")) {
+                queriedIds.push(777);
+                return {
+                    data: {
+                        success: true,
+                        data: {
+                            id: 777,
+                            hash: "08a80a2b0d00925da44f007b4f12e6f34184f1ad",
+                            download_state: "completed",
+                            download_finished: true,
+                            files: [
+                                { id: 1, name: "Bleach - 01.mkv", size: 400000000 }
+                            ]
+                        }
+                    }
+                };
+            }
+            return { data: {} };
+        },
+        post: async () => {
+            throw new Error("Should not call createtorrent");
+        }
+    };
+
+    const result = await addTorBoxTorrent(
+        "magnet:?xt=urn:btih:08a80a2b0d00925da44f007b4f12e6f34184f1ad",
+        "test-token",
+        { http }
+    );
+
+    assert.equal(queriedIds.length, 1);
+    assert.equal(queriedIds[0], 777);
+    assert.equal(result.id, 777);
+    assert.equal(result.isCached, true);
+    assert.equal(result.files.length, 1);
+    assert.equal(result.files[0].name, "Bleach - 01.mkv");
+});
+
+test("generateTorBoxLink parses object response { success: true, data: { link: '...' } }", async () => {
+    const http = {
+        get: async (url, config) => {
+            assert.ok(url.includes("/v1/api/torrents/requestdl"));
+            assert.equal(config.params.torrent_id, "888");
+            assert.equal(config.params.file_id, "3");
+            return {
+                headers: {},
+                data: {
+                    success: true,
+                    data: {
+                        link: "https://edge.torbox.app/download/888/file3.mkv",
+                        filename: "file3.mkv"
+                    }
+                }
+            };
+        }
+    };
+
+    const link = await generateTorBoxLink("torbox://888/3", "test-token", { http });
+    assert.equal(link, "https://edge.torbox.app/download/888/file3.mkv");
+});
+
+test("generateTorBoxLink captures 302 Location header from redirect", async () => {
+    const http = {
+        get: async (url, config) => {
+            if (config.params && config.params.redirect === "false") {
+                return {
+                    headers: {
+                        location: "https://cdn.torbox.app/direct-redirect-link.mp4"
+                    },
+                    data: ""
+                };
+            }
+            throw new Error("Unexpected call");
+        }
+    };
+
+    const link = await generateTorBoxLink("torbox://999/1", "test-token", { http });
+    assert.equal(link, "https://cdn.torbox.app/direct-redirect-link.mp4");
+});
+
+test("generateTorBoxLink resolves numeric ID when link contains a 40-character infohash", async () => {
+    const hash = "08a80a2b0d00925da44f007b4f12e6f34184f1ad";
+    const http = {
+        get: async (url, config) => {
+            if (url.includes("/v1/api/torrents/mylist")) {
+                return {
+                    data: {
+                        success: true,
+                        data: [
+                            { id: 1234, hash: hash }
+                        ]
+                    }
+                };
+            }
+            if (url.includes("/v1/api/torrents/requestdl")) {
+                assert.equal(config.params.torrent_id, 1234, "Should have resolved 40-char hash to numeric ID 1234");
+                return {
+                    headers: {},
+                    data: {
+                        success: true,
+                        data: "https://edge.torbox.app/video.mkv"
+                    }
+                };
+            }
+            throw new Error(`Unexpected url: ${url}`);
+        }
+    };
+
+    const link = await generateTorBoxLink(`torbox://${hash}/5`, "test-token", { http });
+    assert.equal(link, "https://edge.torbox.app/video.mkv");
+});
+
