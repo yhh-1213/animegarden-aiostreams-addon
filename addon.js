@@ -686,10 +686,10 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
         }
 
         let absoluteEp = requestedEp;
-        if (seasonOffset > 0) {
-            absoluteEp = seasonOffset + requestedEp;
-        } else if (cinemetaCumulativeEp) {
+        if (cinemetaCumulativeEp) {
             absoluteEp = cinemetaCumulativeEp;
+        } else if (seasonOffset > 0) {
+            absoluteEp = seasonOffset + requestedEp;
         }
 
         const episodeLog = isMovie 
