@@ -51,9 +51,7 @@ const { buildMediaKey } = require("./lib/cache/torrent-cache");
 const { checkStoreTorzWithCache } = require("./lib/cache/debrid-cache");
 const { maskApiKey } = require("./lib/debrid");
 const { filterByCanonical } = require("./lib/normalizer/match");
-
-let BASE_URL = process.env.BASE_URL || "http://127.0.0.1:7002";
-BASE_URL = BASE_URL.replace(/\/+$/, "");
+const { getRequestBaseUrl } = require("./lib/request-context");
 
 //===============
 // GLOBAL CONCURRENCY LIMITER
@@ -177,7 +175,7 @@ const manifest = {
     "id": "org.community.hellyaddon",
     "version": "1.0.0",
     "name": "HellyAddon",
-    "logo": BASE_URL + "/favicon.png",
+    "logo": getRequestBaseUrl() + "/favicon.png",
     "description": "High-precision anime scraper powered by Anime Garden & Nyaa with exact title matching, season pack support, Chinese subtitles priority, and TorBox & PikPak.",
     "types": ["anime", "movie", "series"],
     "resources": [
@@ -225,7 +223,7 @@ const CATALOG_CONFIG_KEYS = {
     nexio_search: "showSearchCatalog"
 };
 
-function configuredManifest(config) {
+function configuredManifest(config, baseUrl = null) {
     const userConfig = parseConfig(config);
     const catalogs = manifest.catalogs.filter(cat => {
         const key = CATALOG_CONFIG_KEYS[cat.id];
@@ -236,8 +234,10 @@ function configuredManifest(config) {
         (userConfig.debridServices && userConfig.debridServices.length > 0) ||
         userConfig.enableP2P
     );
+    const effectiveBaseUrl = (baseUrl || getRequestBaseUrl()).replace(/\/+$/, "");
     return {
         ...manifest,
+        logo: `${effectiveBaseUrl}/favicon.png`,
         catalogs,
         behaviorHints: {
             ...manifest.behaviorHints,
@@ -841,7 +841,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
                     {
                         name: "🌸 HELLY [INFO]\nCache warming",
                         description: "First scrape is running. Try this episode again in a few seconds.",
-                        url: BASE_URL + "/waiting.mp4"
+                        url: getRequestBaseUrl() + "/waiting.mp4"
                     }
                 ],
                 cacheMaxAge: 15
@@ -1043,7 +1043,7 @@ builder.defineStreamHandler(async ({ type, id, config }) => {
             availabilityByEntry,
             userConfig,
             nexioPayload: hellyPayload,
-            baseUrl: BASE_URL,
+            baseUrl: getRequestBaseUrl(),
             requestedEp,
             expectedSeason,
             absoluteEp,

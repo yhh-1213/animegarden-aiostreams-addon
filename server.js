@@ -9,9 +9,19 @@ const { selectBestVideoFile } = require("./lib/parser");
 const { resolveStorePlayback, resolveStoreSubtitle } = require("./lib/playback");
 const { maskApiKey } = require("./lib/debrid");
 const { applyHttpCacheHeaders } = require("./lib/cache/http-cache");
+const { extractBaseUrlFromReq, getRequestBaseUrl, runWithRequestContext } = require("./lib/request-context");
 
 const app = express();
+app.set("trust proxy", true);
 app.use(express.json()); 
+
+// Dynamic request context captures host & protocol for remote playback resolution
+app.use((req, res, next) => {
+    const baseUrl = extractBaseUrlFromReq(req);
+    runWithRequestContext({ baseUrl, req }, () => {
+        next();
+    });
+}); 
 
 //===============
 // CORS & PREFLIGHT HANDLING
@@ -46,11 +56,6 @@ app.use(express.static(path.join(__dirname, "public")));
 app.use(express.static(path.join(__dirname, "static")));
 
 const port = process.env.PORT || 7002;
-
-// Fallback for missing environment variables when self-hosting
-let BASE_URL = process.env.BASE_URL || "http://127.0.0.1:7002";
-BASE_URL = BASE_URL.replace(/\/+$/, "");
-
 const NYAA_DOMAIN = (process.env.NYAA_DOMAIN || "https://nyaa.iss.one").replace(/\/+$/, "");
 
 // API status endpoint
@@ -184,12 +189,12 @@ app.get("/sub/:nexioPayload/:serviceIndex/:hash/:fileId", async (req, res) => {
 //===============
 function serveLoadingVideo(req, res) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.redirect(BASE_URL + "/waiting.mp4");
+    res.redirect(getRequestBaseUrl() + "/waiting.mp4");
 }
 
 function serveArchiveVideo(req, res) {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.redirect(BASE_URL + "/archive.mp4");
+    res.redirect(getRequestBaseUrl() + "/archive.mp4");
 }
 
 //===============
@@ -264,7 +269,7 @@ app.get("/resolve/:nexioPayload/:serviceIndex/:hash/:episode?", async (req, res)
 });
 
 app.get("/manifest.json", (req, res) => {
-    res.json(configuredManifest({}));
+    res.json(configuredManifest({}, getRequestBaseUrl()));
 });
 
 app.get("/:config/manifest.json", (req, res, next) => {
@@ -275,7 +280,7 @@ app.get("/:config/manifest.json", (req, res, next) => {
         } catch (e) {
             decoded = req.params.config;
         }
-        res.json(configuredManifest(decoded));
+        res.json(configuredManifest(decoded, getRequestBaseUrl()));
     } catch (e) {
         next();
     }

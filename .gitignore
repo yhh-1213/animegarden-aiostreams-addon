@@ -12,3 +12,4 @@ data/catalog-exports/
 data/anime/nexio-anime-map-v1.json
 .env
 .env.*
+!.env.example
